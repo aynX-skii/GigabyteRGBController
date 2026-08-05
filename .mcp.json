@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "radare2": {
+      "command": "/home/ice/.local/share/radare2/prefix/bin/r2mcp",
+      "args": [],
+      "env": {
+        "LD_LIBRARY_PATH": "/home/ice/.local/lib"
+      }
+    }
+  }
+}

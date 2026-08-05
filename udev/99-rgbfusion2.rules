@@ -1,0 +1,19 @@
+# Gigabyte RGB Fusion 2.0 lighting controllers (ITE Tech.)
+#
+# Grants the local seat's logged-in user read/write access to the hidraw nodes,
+# so GigabyteRGBController does not have to run as root.
+#
+# Install:
+#   sudo cp 99-rgbfusion2.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger --subsystem-match=hidraw
+#
+# 048d:5702  ITE 5702  (B760M AORUS ELITE and many others)
+# 048d:8297  ITE 8297  (X570 AORUS family)
+# 048d:5711  ITE 5711
+# 048d:7900  ITE 8297FN
+
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="5702", TAG+="uaccess", MODE="0660"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="8297", TAG+="uaccess", MODE="0660"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="5711", TAG+="uaccess", MODE="0660"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="7900", TAG+="uaccess", MODE="0660"

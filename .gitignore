@@ -1,0 +1,37 @@
+# ---- build output ----------------------------------------------------------
+build/
+build-*/
+cmake-build-*/
+install/
+
+# CMake in-source droppings, in case anyone configures without -B
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+.qt/
+.rcc/
+
+# ---- editor / tooling ------------------------------------------------------
+.cache/
+.vscode/
+.idea/
+*.user
+*.autosave
+compile_flags.txt
+
+# ---- vendor material -------------------------------------------------------
+# dist/ holds the GIGABYTE CONTROL CENTER installer used for the static
+# reverse-engineering work. It is ~860 MB of redistributable-restricted vendor
+# software plus scratch screenshots - the protocol findings live in README.md,
+# which is the part worth version-controlling.
+dist/
+
+# ---- misc ------------------------------------------------------------------
+*.o
+*.so
+*.a
+*~
+.DS_Store

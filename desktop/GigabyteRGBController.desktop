@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Gigabyte RGB Controller
+Name[zh_CN]=技嘉 RGB 灯光控制
+GenericName=RGB Lighting Control
+GenericName[zh_CN]=RGB 灯光控制
+Comment=Control Gigabyte RGB Fusion 2.0 motherboard lighting
+Comment[zh_CN]=控制技嘉 RGB Fusion 2.0 主板灯光
+Exec=GigabyteRGBController
+Icon=preferences-desktop-theme
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=RGB;LED;Lighting;Gigabyte;AORUS;Fusion;

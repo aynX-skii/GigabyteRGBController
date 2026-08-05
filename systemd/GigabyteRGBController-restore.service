@@ -1,0 +1,20 @@
+[Unit]
+Description=Restore Gigabyte RGB Fusion lighting
+Documentation=https://github.com/
+# The hidraw node is granted to the local session via TAG+="uaccess", so this
+# has to run as a user unit after the graphical session is up.
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The controller can take a moment to enumerate after a cold boot.
+ExecStartPre=/usr/bin/sleep 3
+ExecStart=/usr/local/bin/GigabyteRGBController --restore
+# Turning the lighting off on shutdown is optional; drop this line to keep the
+# last colour while the machine is powered down.
+# ExecStop=/usr/local/bin/GigabyteRGBController --set off
+
+[Install]
+WantedBy=graphical-session.target
