@@ -35,10 +35,10 @@ QString Config::path()
 {
     const QString dir =
         QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    // Deliberately still "gcc-linux" after the rename to GigabyteRGBController:
-    // this file holds the zone detection results, which cost the user a manual
-    // pass through the probe wizard. Moving the path would silently orphan them.
-    return dir + QStringLiteral("/gcc-linux/zones.ini");
+    // Note: this moved from "gcc-linux" with the rename to GigabyteRGBController.
+    // Configs written under the old directory are not read; users who ran the
+    // probe wizard before the rename must move the file or re-run the wizard.
+    return dir + QStringLiteral("/GigabyteRGBController/zones.ini");
 }
 
 void Config::save(const ZoneSetting zones[RgbFusion2::kZoneCount])

@@ -161,7 +161,7 @@ GigabyteRGBController --set off
 控制器在温重启后会保留设置，但完整断电就丢了，而 Linux 下没有厂商服务把它写回去。
 
 图形界面每次"应用"（开着自动应用时则是每次下发）、以及每次 `--set`，都会把状态
-写入 `~/.config/gcc-linux/zones.ini`（遵循 `XDG_CONFIG_HOME`）。`--restore` 重新套用：
+写入 `~/.config/GigabyteRGBController/zones.ini`（遵循 `XDG_CONFIG_HOME`）。`--restore` 重新套用：
 
 ```bash
 GigabyteRGBController --restore
@@ -174,10 +174,9 @@ GigabyteRGBController --restore
 同一个文件里还有一个 `[custom]` 段，存图形界面的自定义色板。它和区域状态分开存，
 因为 `--set` 只重写效果字段，色板必须活下来。
 
-> 目录名在项目改名为 `GigabyteRGBController` 后**仍是 `gcc-linux`**，是故意的：
-> 这个文件里存着区域探测结果，那是用户一个区域一个区域试出来的，换路径会让它
-> 凭空消失。要迁移就手动 `mv ~/.config/gcc-linux ~/.config/GigabyteRGBController`
-> 并同步改 `Config::path()`。
+> 目录名早先是 `gcc-linux`，现已随项目改名为 `GigabyteRGBController`。程序**不会**
+> 读旧路径，所以在改名前跑过探测向导的话，那份区域探测结果不会自动带过来。手动迁移：
+> `mv ~/.config/gcc-linux ~/.config/GigabyteRGBController`，否则就重跑一遍向导。
 
 开机自动恢复：
 

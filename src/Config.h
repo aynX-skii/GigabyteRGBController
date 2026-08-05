@@ -42,7 +42,7 @@ struct ZoneSetting {
 
 namespace Config {
 
-// ~/.config/gcc-linux/zones.ini (honours XDG_CONFIG_HOME).
+// ~/.config/GigabyteRGBController/zones.ini (honours XDG_CONFIG_HOME).
 QString path();
 
 void save(const ZoneSetting zones[RgbFusion2::kZoneCount]);
