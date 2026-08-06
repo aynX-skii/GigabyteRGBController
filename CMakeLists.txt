@@ -14,8 +14,10 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
+# DBus is only used to hear logind's resume announcement; it ships with qtbase,
+# so this adds no package beyond what Qt already brings.
 find_package(Qt6 REQUIRED COMPONENTS
-    Core Gui Qml Quick QuickControls2 QuickLayouts)
+    Core DBus Gui Qml Quick QuickControls2 QuickLayouts)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -87,9 +89,14 @@ qt_add_qml_module(GigabyteRGBController
 )
 
 target_link_libraries(GigabyteRGBController PRIVATE
-    Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
+    Qt6::Core Qt6::DBus Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
 
 target_compile_options(GigabyteRGBController PRIVATE -Wall -Wextra)
+
+# Reaches --version and the title bar; keeping it out of the source means the
+# project version is stated in exactly one place.
+target_compile_definitions(GigabyteRGBController PRIVATE
+    GRC_VERSION="${PROJECT_VERSION}")
 
 install(TARGETS GigabyteRGBController RUNTIME DESTINATION bin)
 install(FILES udev/99-rgbfusion2.rules DESTINATION lib/udev/rules.d)

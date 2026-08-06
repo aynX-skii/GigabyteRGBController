@@ -1,6 +1,13 @@
 #include "Controller.h"
 
+#include <QClipboard>
+#include <QCoreApplication>
+#include <QDBusConnection>
 #include <QDateTime>
+#include <QFile>
+#include <QFileInfo>
+#include <QGuiApplication>
+#include <QTextStream>
 #include <QVariantMap>
 
 namespace {
@@ -85,8 +92,55 @@ Controller::Controller(QObject *parent)
     if (m_customColours.size() != Config::kCustomColourSlots)
         m_customColours.resize(Config::kCustomColourSlots);
 
+    m_profiles      = Config::profileNames();
+    m_activeProfile = Config::activeProfile();
+    m_window        = Config::loadWindow();
+
+    m_saveTimer.setSingleShot(true);
+    m_saveTimer.setInterval(1000);
+    connect(&m_saveTimer, &QTimer::timeout, this, &Controller::saveNow);
+
+    m_watchTimer.setInterval(3000);
+    connect(&m_watchTimer, &QTimer::timeout, this, &Controller::watchdogTick);
+    m_watchTimer.start();
+
+    // Suspend can cut power to the controller, and it has no command to read
+    // its effects back - so logind's resume announcement is the cue to push the
+    // saved ones again. Fails quietly where there is no system bus or no
+    // logind, which costs nothing but this feature.
+    const bool sleepSignal = QDBusConnection::systemBus().connect(
+        QStringLiteral("org.freedesktop.login1"),
+        QStringLiteral("/org/freedesktop/login1"),
+        QStringLiteral("org.freedesktop.login1.Manager"),
+        QStringLiteral("PrepareForSleep"),
+        this, SLOT(onPrepareForSleep(bool)));
+    if (!sleepSignal)
+        log(QStringLiteral("未能订阅 logind 的睡眠信号，唤醒后不会自动恢复灯效。"));
+
     connectDevice();
     connectLampArray();
+}
+
+Controller::~Controller()
+{
+    if (m_saveTimer.isActive())
+        saveNow();
+}
+
+QString Controller::appVersion() const
+{
+    return QCoreApplication::applicationVersion();
+}
+
+void Controller::scheduleSave()
+{
+    m_saveTimer.start();
+}
+
+void Controller::saveNow()
+{
+    m_saveTimer.stop();
+    Config::save(m_zones);
 }
 
 // ---- device ----------------------------------------------------------------
@@ -97,10 +151,15 @@ void Controller::connectDevice()
 
     QString error;
     if (!m_rgb.openFirstDevice(&error)) {
+        // Kept so the device bar can say why, not just that. On a first run
+        // this string is the whole answer - it carries the udev recipe - and
+        // the device bar is where someone looks when the dot is red.
+        m_lastOpenError = error;
         setStatus(error, true);
         emit deviceChanged();
         return;
     }
+    m_lastOpenError.clear();
     if (!m_rgb.initialize(&error)) {
         setStatus(QStringLiteral("已打开 %1，但初始化失败：%2")
                       .arg(m_rgb.devicePath(), error), true);
@@ -122,8 +181,11 @@ QString Controller::deviceName() const
 
 QString Controller::deviceDetail() const
 {
-    if (!m_rgb.isOpen())
-        return QStringLiteral("没有找到 RGB Fusion 接口");
+    if (!m_rgb.isOpen()) {
+        return m_lastOpenError.isEmpty()
+                   ? QStringLiteral("没有找到 RGB Fusion 接口")
+                   : m_lastOpenError;
+    }
 
     const RgbFusion2::DeviceInfo &i = m_rgb.deviceInfo();
     return QStringLiteral("固件 %1  ·  芯片 0x%2  ·  %3")
@@ -136,6 +198,105 @@ void Controller::rescan()
 {
     connectDevice();
     connectLampArray();
+}
+
+bool Controller::hasManagedZones() const
+{
+    for (const ZoneSetting &z : m_zones) {
+        if (z.managed)
+            return true;
+    }
+    return false;
+}
+
+void Controller::watchdogTick()
+{
+    // The probe drives the device zone by zone and cannot tolerate the handle
+    // being pulled out from under it.
+    if (m_detecting)
+        return;
+
+    if (m_rgb.isOpen()) {
+        if (QFileInfo::exists(m_rgb.devicePath()))
+            return;
+
+        const QString gone = m_rgb.devicePath();
+        m_rgb.close();
+        emit deviceChanged();
+        // Nothing of the previous state survives in the controller, so whatever
+        // is on screen counts as unsent again.
+        setPending(hasManagedZones());
+        setStatus(QStringLiteral("控制器已断开（%1 消失），正在等待重新出现…").arg(gone), true);
+        return;
+    }
+
+    // Retried quietly: on a machine without the hardware this fires every three
+    // seconds forever, and logging each attempt would bury everything else.
+    QString error;
+    if (!m_rgb.openFirstDevice(&error))
+        return;
+    if (!m_rgb.initialize(&error)) {
+        m_rgb.close();
+        return;
+    }
+
+    emit deviceChanged();
+    reapplySaved(QStringLiteral("控制器已重新连接"));
+}
+
+void Controller::reapplySaved(const QString &reason)
+{
+    if (!m_rgb.isOpen())
+        return;
+
+    if (!hasManagedZones()) {
+        setStatus(QStringLiteral("%1：没有已保存的灯效可恢复。").arg(reason));
+        return;
+    }
+
+    QString error;
+    if (m_autoApply && Config::apply(m_rgb, m_zones, &error)) {
+        setPending(false);
+        setStatus(QStringLiteral("%1，灯效已恢复。").arg(reason));
+        return;
+    }
+
+    // With auto-apply off, pushing effects the user did not ask for would be
+    // the wrong call - the button lighting up is the whole signal.
+    setPending(true);
+    setStatus(m_autoApply
+                  ? QStringLiteral("%1，但恢复灯效失败：%2").arg(reason, error)
+                  : QStringLiteral("%1，点「应用」恢复灯效。").arg(reason),
+              m_autoApply);
+}
+
+void Controller::onPrepareForSleep(bool sleeping)
+{
+    if (sleeping) {
+        log(QStringLiteral("系统即将进入睡眠。"));
+        return;
+    }
+
+    // The node can take a moment to come back, and if it went away entirely the
+    // watchdog owns the reconnect. This timer covers the other case: the node
+    // survived, but the controller lost its state to the power cut.
+    QTimer::singleShot(2000, this, [this]() {
+        reapplySaved(QStringLiteral("已从睡眠唤醒"));
+    });
+}
+
+void Controller::handleIoFailure(const QString &message)
+{
+    setStatus(message, true);
+
+    // A write can fail for a passing reason; only a node that is no longer
+    // there means the handle is dead. Dropping it hands the retry to the
+    // watchdog instead of leaving every later write to fail the same way.
+    if (m_rgb.isOpen() && !QFileInfo::exists(m_rgb.devicePath())) {
+        m_rgb.close();
+        emit deviceChanged();
+        setPending(hasManagedZones());
+    }
 }
 
 // ---- zones -----------------------------------------------------------------
@@ -164,43 +325,104 @@ QVariantList Controller::zones() const
     return out;
 }
 
-void Controller::setSelectedZone(int zone)
+int Controller::selectedZone() const
 {
-    const int clamped = zone < 0 ? -1 : qMin(zone, RgbFusion2::kZoneCount - 1);
-    if (clamped == m_selectedZone)
+    // Exactly one, or nothing: callers that ask this question - renaming, for
+    // one - have no sensible answer for a multi-zone selection.
+    int found = -1;
+    for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
+        if (!isSelected(i))
+            continue;
+        if (found >= 0)
+            return -1;
+        found = i;
+    }
+    return found;
+}
+
+void Controller::setSelection(quint8 mask)
+{
+    if (mask == 0 || mask == m_selection)
         return;
-    m_selectedZone = clamped;
+    m_selection = mask;
     emit selectedZoneChanged();
     emit settingsChanged();
 }
 
+void Controller::setSelectedZone(int zone)
+{
+    if (zone < 0)
+        selectAllZones();
+    else
+        selectOnlyZone(zone);
+}
+
+void Controller::selectAllZones()
+{
+    setSelection(0xFF);
+}
+
+void Controller::selectOnlyZone(int zone)
+{
+    if (zone < 0 || zone >= RgbFusion2::kZoneCount)
+        return;
+    setSelection(static_cast<quint8>(1u << zone));
+}
+
+void Controller::toggleZone(int zone)
+{
+    if (zone < 0 || zone >= RgbFusion2::kZoneCount)
+        return;
+
+    const quint8 bit = static_cast<quint8>(1u << zone);
+    // Turning off the last selected zone would leave the editor pointing at
+    // nothing; treat it as a no-op rather than as an empty selection.
+    if (m_selection == bit)
+        return;
+
+    setSelection(static_cast<quint8>(m_selection ^ bit));
+}
+
 QString Controller::selectionLabel() const
 {
-    if (m_selectedZone < 0)
+    if (m_selection == 0xFF)
         return QStringLiteral("全部区域");
-    const QString &n = m_zones[m_selectedZone].name;
-    return n.isEmpty() ? QStringLiteral("区域 %1").arg(m_selectedZone + 1) : n;
+
+    const int one = selectedZone();
+    if (one >= 0) {
+        const QString &n = m_zones[one].name;
+        return n.isEmpty() ? QStringLiteral("区域 %1").arg(one + 1) : n;
+    }
+
+    int count = 0;
+    for (int i = 0; i < RgbFusion2::kZoneCount; ++i)
+        count += isSelected(i) ? 1 : 0;
+    // No space before the measure word: "应用到3个区域" is the button's whole text.
+    return QStringLiteral("%1个区域").arg(count);
 }
 
 int Controller::representativeZone() const
 {
-    if (m_selectedZone >= 0)
-        return m_selectedZone;
+    // A lit zone says more about what the controls should show than an empty
+    // one does, so a connected zone wins over a merely selected one.
+    int first = -1;
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
+        if (!isSelected(i))
+            continue;
+        if (first < 0)
+            first = i;
         if (m_zones[i].connected)
             return i;
     }
-    return 0;
+    return first < 0 ? 0 : first;
 }
 
 template <typename F>
 void Controller::forSelectedZones(F fn)
 {
-    if (m_selectedZone < 0) {
-        for (auto &z : m_zones)
-            fn(z);
-    } else {
-        fn(m_zones[m_selectedZone]);
+    for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
+        if (isSelected(i))
+            fn(m_zones[i]);
     }
 }
 
@@ -209,7 +431,7 @@ void Controller::renameZone(int zone, const QString &name)
     if (zone < 0 || zone >= RgbFusion2::kZoneCount)
         return;
     m_zones[zone].name = name.trimmed();
-    Config::save(m_zones);
+    scheduleSave();
     emit zonesChanged();
     emit selectedZoneChanged();
     setStatus(m_zones[zone].name.isEmpty()
@@ -224,7 +446,7 @@ void Controller::setZoneConnected(int zone, bool connected)
         return;
     m_zones[zone].connected = connected;
     m_zones[zone].probed    = true;
-    Config::save(m_zones);
+    scheduleSave();
     emit zonesChanged();
 }
 
@@ -284,17 +506,8 @@ void Controller::setMode(int mode)
     if (m == m_zones[representativeZone()].mode)
         return;
 
-    // Each mode has its own brightness ceiling; carrying a higher value across
-    // would silently clip at the controller.
-    const int cap = RgbFusion2::maxBrightness(m);
-    forSelectedZones([&](ZoneSetting &z) {
-        z.mode    = m;
-        z.managed = true;
-        if (cap > 0 && z.brightness > cap)
-            z.brightness = cap;
-        if (z.minBrightness > z.brightness)
-            z.minBrightness = z.brightness;
-    });
+    // ZoneSetting::setMode carries the brightness ceiling with the switch.
+    forSelectedZones([&](ZoneSetting &z) { z.setMode(m); });
 
     emit settingsChanged();
     emit zonesChanged();
@@ -379,20 +592,20 @@ void Controller::flush()
 
     QString error;
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
-        if (m_selectedZone >= 0 && i != m_selectedZone)
+        if (!isSelected(i))
             continue;
         const ZoneSetting &z = m_zones[i];
         if (!m_rgb.setZone(i, z.mode, z.colour, z.brightness, z.speed,
                            z.minBrightness, &error)) {
-            setStatus(QStringLiteral("区域 %1 设置失败：%2").arg(i + 1).arg(error), true);
+            handleIoFailure(QStringLiteral("区域 %1 设置失败：%2").arg(i + 1).arg(error));
             return;
         }
     }
     if (!m_rgb.apply(&error)) {
-        setStatus(QStringLiteral("提交失败：%1").arg(error), true);
+        handleIoFailure(QStringLiteral("提交失败：%1").arg(error));
         return;
     }
-    Config::save(m_zones);
+    scheduleSave();
     setPending(false);
 }
 
@@ -408,22 +621,22 @@ void Controller::apply()
     QString error;
     int sent = 0;
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
-        if (m_selectedZone >= 0 && i != m_selectedZone)
+        if (!isSelected(i))
             continue;
         const ZoneSetting &z = m_zones[i];
         if (!m_rgb.setZone(i, z.mode, z.colour, z.brightness, z.speed,
                            z.minBrightness, &error)) {
-            setStatus(QStringLiteral("区域 %1 设置失败：%2").arg(i + 1).arg(error), true);
+            handleIoFailure(QStringLiteral("区域 %1 设置失败：%2").arg(i + 1).arg(error));
             return;
         }
         ++sent;
     }
     if (!m_rgb.apply(&error)) {
-        setStatus(QStringLiteral("提交失败：%1").arg(error), true);
+        handleIoFailure(QStringLiteral("提交失败：%1").arg(error));
         return;
     }
 
-    Config::save(m_zones);
+    scheduleSave();
     setPending(false);
     emit zonesChanged();
     setStatus(QStringLiteral("已应用 %1 个区域，配置已保存。").arg(sent));
@@ -440,24 +653,96 @@ void Controller::allOff()
 
     QString error;
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
-        m_zones[i].mode    = RgbFusion2::Mode::Off;
-        m_zones[i].managed = true;
+        // Keeps the stored brightness intact - "off" has a ceiling of 0, and
+        // setMode leaves the field alone in that case, which is what makes
+        // picking an effect again restore the previous look.
+        m_zones[i].setMode(RgbFusion2::Mode::Off);
         if (!m_rgb.setZone(i, RgbFusion2::Mode::Off, QColor(), 0,
                            RgbFusion2::Speed::Normal, 0, &error)) {
-            setStatus(QStringLiteral("区域 %1 关闭失败：%2").arg(i + 1).arg(error), true);
+            handleIoFailure(QStringLiteral("区域 %1 关闭失败：%2").arg(i + 1).arg(error));
             return;
         }
     }
     if (!m_rgb.apply(&error)) {
-        setStatus(QStringLiteral("提交失败：%1").arg(error), true);
+        handleIoFailure(QStringLiteral("提交失败：%1").arg(error));
         return;
     }
 
-    Config::save(m_zones);
+    scheduleSave();
     setPending(false);
     emit zonesChanged();
     emit settingsChanged();
     setStatus(QStringLiteral("所有区域已关闭。"));
+}
+
+// ---- profiles --------------------------------------------------------------
+
+void Controller::selectProfile(const QString &name)
+{
+    if (!Config::loadProfile(name, m_zones)) {
+        setStatus(QStringLiteral("方案「%1」不存在。").arg(name), true);
+        return;
+    }
+
+    m_activeProfile = name;
+    Config::setActiveProfile(name);
+    scheduleSave();
+
+    emit profilesChanged();
+    emit zonesChanged();
+    emit settingsChanged();
+
+    // Same route as any other edit: auto-apply pushes it, otherwise the apply
+    // button lights up and waits.
+    setPending(true);
+    if (m_autoApply && m_rgb.isOpen() && !m_detecting)
+        m_flushTimer.start();
+
+    setStatus(QStringLiteral("已切换到方案「%1」。").arg(name));
+}
+
+void Controller::saveProfileAs(const QString &name)
+{
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        setStatus(QStringLiteral("方案名不能为空。"), true);
+        return;
+    }
+
+    const bool existed = m_profiles.contains(trimmed);
+    Config::saveProfile(trimmed, m_zones);
+    Config::setActiveProfile(trimmed);
+
+    m_activeProfile = trimmed;
+    m_profiles      = Config::profileNames();
+    emit profilesChanged();
+
+    setStatus(existed ? QStringLiteral("方案「%1」已覆盖。").arg(trimmed)
+                      : QStringLiteral("已保存为新方案「%1」。").arg(trimmed));
+}
+
+void Controller::updateActiveProfile()
+{
+    if (m_activeProfile.isEmpty()) {
+        setStatus(QStringLiteral("当前没有选中的方案，请先「另存为」。"), true);
+        return;
+    }
+    Config::saveProfile(m_activeProfile, m_zones);
+    setStatus(QStringLiteral("方案「%1」已更新为当前设置。").arg(m_activeProfile));
+}
+
+void Controller::deleteProfile(const QString &name)
+{
+    Config::removeProfile(name);
+
+    // Deleting the active profile leaves the live zones exactly as they are -
+    // only the name they were saved under goes away.
+    if (m_activeProfile == name)
+        m_activeProfile.clear();
+
+    m_profiles = Config::profileNames();
+    emit profilesChanged();
+    setStatus(QStringLiteral("方案「%1」已删除。").arg(name));
 }
 
 // ---- custom swatches -------------------------------------------------------
@@ -561,7 +846,7 @@ void Controller::cancelDetection()
 void Controller::finishDetection()
 {
     m_detecting = false;
-    Config::save(m_zones);
+    scheduleSave();
 
     // Put the user's own settings back - the probe overwrote every zone.
     QString error;
@@ -691,6 +976,17 @@ void Controller::lampApplyAll()
                   .arg(m_lampColour.name().toUpper()));
 }
 
+// ---- window geometry -------------------------------------------------------
+
+void Controller::saveWindow(const QRect &geometry, bool maximized)
+{
+    if (!m_savesWindow)
+        return;
+    m_window.geometry  = geometry;
+    m_window.maximized = maximized;
+    Config::saveWindow(m_window);
+}
+
 // ---- status and log --------------------------------------------------------
 
 void Controller::onTraffic(bool outgoing, const QString &label, const QByteArray &data)
@@ -740,6 +1036,67 @@ void Controller::log(const QString &text, bool isError)
         m_logBacklog.removeFirst();
 
     emit logLine(ts, text, isError);
+}
+
+bool Controller::logLineMatches(const QString &text, bool isError,
+                                bool errorsOnly, const QString &needle) const
+{
+    if (errorsOnly && !isError)
+        return false;
+    return needle.isEmpty()
+           || text.contains(needle, Qt::CaseInsensitive);
+}
+
+QVariantList Controller::filteredLog(bool errorsOnly, const QString &needle) const
+{
+    if (!errorsOnly && needle.isEmpty())
+        return m_logBacklog;
+
+    QVariantList out;
+    for (const QVariant &v : m_logBacklog) {
+        const QVariantMap m = v.toMap();
+        if (logLineMatches(m[QStringLiteral("body")].toString(),
+                           m[QStringLiteral("isError")].toBool(),
+                           errorsOnly, needle))
+            out << v;
+    }
+    return out;
+}
+
+// Flattens the filtered view the way it reads on screen, timestamps included -
+// what gets pasted into a bug report should be what was being looked at.
+static QString flattenLog(const QVariantList &lines)
+{
+    QStringList out;
+    out.reserve(lines.size());
+    for (const QVariant &v : lines) {
+        const QVariantMap m = v.toMap();
+        out << QStringLiteral("[%1] %2")
+                   .arg(m[QStringLiteral("timestamp")].toString(),
+                        m[QStringLiteral("body")].toString());
+    }
+    return out.join(QLatin1Char('\n'));
+}
+
+void Controller::copyLogToClipboard(bool errorsOnly, const QString &needle)
+{
+    const QVariantList lines = filteredLog(errorsOnly, needle);
+    QGuiApplication::clipboard()->setText(flattenLog(lines));
+    setStatus(QStringLiteral("已复制 %1 行日志到剪贴板。").arg(lines.size()));
+}
+
+void Controller::exportLog(const QUrl &file, bool errorsOnly, const QString &needle)
+{
+    const QString path = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        setStatus(QStringLiteral("导出失败：%1").arg(f.errorString()), true);
+        return;
+    }
+
+    const QVariantList lines = filteredLog(errorsOnly, needle);
+    QTextStream(&f) << flattenLog(lines) << "\n";
+    setStatus(QStringLiteral("已导出 %1 行日志到 %2").arg(lines.size()).arg(path));
 }
 
 void Controller::clearLog()

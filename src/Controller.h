@@ -18,13 +18,19 @@
 
 #include <QColor>
 #include <QObject>
+#include <QRect>
+#include <QStringList>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantList>
 #include <QVector>
 
 class Controller : public QObject
 {
     Q_OBJECT
+
+    // ---- application ------------------------------------------------------
+    Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
 
     // ---- device -----------------------------------------------------------
     Q_PROPERTY(bool    connected    READ connected    NOTIFY deviceChanged)
@@ -38,6 +44,11 @@ class Controller : public QObject
 
     // ---- zones ------------------------------------------------------------
     Q_PROPERTY(QVariantList zones        READ zones        NOTIFY zonesChanged)
+
+    // The selection is a bitmask - editing several zones at once is the whole
+    // point of the zone bar. `selectedZone` stays for the cases that need
+    // exactly one (renaming), and reports -1 whenever that is not the case.
+    Q_PROPERTY(int          selectionMask READ selectionMask NOTIFY selectedZoneChanged)
     Q_PROPERTY(int          selectedZone READ selectedZone WRITE setSelectedZone
                                          NOTIFY selectedZoneChanged)
     Q_PROPERTY(QString      selectionLabel READ selectionLabel
@@ -72,6 +83,10 @@ class Controller : public QObject
     // Drives the apply button: nothing pending, nothing to press.
     Q_PROPERTY(bool pending READ pending NOTIFY pendingChanged)
 
+    // ---- profiles ---------------------------------------------------------
+    Q_PROPERTY(QStringList profiles      READ profiles      NOTIFY profilesChanged)
+    Q_PROPERTY(QString     activeProfile READ activeProfile NOTIFY profilesChanged)
+
     // ---- custom colour swatches ------------------------------------------
     Q_PROPERTY(QVariantList customColours READ customColours
                                           NOTIFY customColoursChanged)
@@ -92,6 +107,13 @@ class Controller : public QObject
 
 public:
     explicit Controller(QObject *parent = nullptr);
+    ~Controller() override;
+
+    QString appVersion() const;
+
+    // Screenshot mode renders one frame at a fixed size and quits; letting that
+    // land in the config would mean a build-time aid moving the user's window.
+    void setSavesWindowState(bool on) { m_savesWindow = on; }
 
     bool    connected() const { return m_rgb.isOpen(); }
     QString deviceName() const;
@@ -102,7 +124,8 @@ public:
     bool    statusIsError() const { return m_statusIsError; }
 
     QVariantList zones() const;
-    int          selectedZone() const { return m_selectedZone; }
+    int          selectionMask() const { return m_selection; }
+    int          selectedZone() const;
     void         setSelectedZone(int zone);
     QString      selectionLabel() const;
 
@@ -130,6 +153,9 @@ public:
 
     bool pending() const { return m_pending; }
 
+    QStringList profiles() const { return m_profiles; }
+    QString     activeProfile() const { return m_activeProfile; }
+
     QVariantList customColours() const;
     QVariantList presetColours() const;
 
@@ -154,6 +180,22 @@ public slots:
     // already know their board and do not want to sit through the wizard.
     void setZoneConnected(int zone, bool connected);
 
+    // ---- selection --------------------------------------------------------
+    void selectAllZones();
+    void selectOnlyZone(int zone);
+
+    // Ctrl-click: adds or removes one zone. Removing the last one is ignored.
+    void toggleZone(int zone);
+
+    // ---- profiles ---------------------------------------------------------
+    //
+    // Switching loads a snapshot over the live zones without saving the
+    // outgoing ones: a profile is what you saved, not where you drifted to.
+    void selectProfile(const QString &name);
+    void saveProfileAs(const QString &name);
+    void updateActiveProfile();
+    void deleteProfile(const QString &name);
+
     void saveCustomColour(int slot, const QColor &c);
     void clearCustomColour(int slot);
 
@@ -163,14 +205,39 @@ public slots:
     void answerDetection(bool hasLeds);
     void cancelDetection();
 
+    // logind's PrepareForSleep: true on the way down, false once back. A slot
+    // rather than a lambda because the D-Bus connection is made by signature.
+    void onPrepareForSleep(bool sleeping);
+
     void lampRescan();
     void lampApplyAll();
+
+    // ---- window geometry --------------------------------------------------
+    //
+    // The window draws its own frame, so no session manager puts it back where
+    // it was; QML hands the last windowed rectangle here on close.
+    QRect windowGeometry() const { return m_window.geometry; }
+    bool  windowMaximized() const { return m_window.maximized; }
+    void  saveWindow(const QRect &geometry, bool maximized);
 
     // Everything logged so far. The device is opened in the constructor, well
     // before the QML log view exists, so those lines would otherwise be lost -
     // and they are exactly the ones worth seeing when a device fails to open.
     QVariantList logBacklog() const { return m_logBacklog; }
     void clearLog();
+
+    // Filtering happens here rather than in a QML model: the backlog is capped
+    // at 800 entries, so rebuilding the view's model on a filter change is
+    // cheaper than carrying a proxy model around.
+    QVariantList filteredLog(bool errorsOnly, const QString &needle) const;
+
+    // True when a line would survive the current filter - the view uses it to
+    // decide whether an arriving line belongs on screen.
+    bool logLineMatches(const QString &text, bool isError,
+                        bool errorsOnly, const QString &needle) const;
+
+    void copyLogToClipboard(bool errorsOnly, const QString &needle);
+    void exportLog(const QUrl &file, bool errorsOnly, const QString &needle);
 
 signals:
     void deviceChanged();
@@ -181,6 +248,7 @@ signals:
     void autoApplyChanged();
     void pendingChanged();
     void customColoursChanged();
+    void profilesChanged();
     void detectionChanged();
     void lampChanged();
     void lampColourChanged();
@@ -195,14 +263,36 @@ private:
     void connectDevice();
     void connectLampArray();
 
+    // Runs every few seconds. While connected it checks the hidraw node is
+    // still there - a replug or a resume renumbers /dev/hidrawN and the old fd
+    // just starts failing - and while disconnected it quietly retries the open,
+    // so the connection dot stops being a lie.
+    void watchdogTick();
+
+    // Called when a write fails: decides whether that was a transient error or
+    // the device going away, and drops the handle in the latter case.
+    void handleIoFailure(const QString &message);
+
+    // Pushes the saved effects back out. Both the reconnect path and the
+    // resume-from-suspend path need it: either way the controller is in its
+    // power-on state whatever the UI shows, and it has no command to read the
+    // current effects back.
+    void reapplySaved(const QString &reason);
+
+    bool hasManagedZones() const;
+
     void setStatus(const QString &text, bool isError = false);
     void log(const QString &text, bool isError = false);
 
+    bool isSelected(int zone) const { return m_selection & (1u << zone); }
+
     // Which zone the editor reads from. For a single selection that is the zone
-    // itself; for "all zones" it is the first zone that actually has LEDs, so
-    // the controls reflect what is visible on the board rather than an
-    // arbitrary empty zone 0.
+    // itself; for a wider one it is the first selected zone that actually has
+    // LEDs, so the controls reflect what is visible on the board rather than an
+    // arbitrary empty zone.
     int representativeZone() const;
+
+    void setSelection(quint8 mask);
 
     // Runs `fn` over every zone the current selection covers.
     template <typename F> void forSelectedZones(F fn);
@@ -213,6 +303,13 @@ private:
     void scheduleFlush();
     void setPending(bool on);
 
+    // Dragging a slider with auto-apply on used to rewrite the whole INI every
+    // 120 ms. The state that matters is the one you stop on, so writes are
+    // coalesced - and forced out in the destructor, because quitting right
+    // after a change must not lose it.
+    void scheduleSave();
+    void saveNow();
+
     // Lights exactly one zone white, everything else off - the wizard's probe.
     bool lightOnlyZone(int zone, QString *error);
 
@@ -222,15 +319,22 @@ private:
     LampArray   m_lamp;
     ZoneSetting m_zones[RgbFusion2::kZoneCount];
 
-    int  m_selectedZone = -1;      // -1 = all zones
+    // Bit i = zone i is being edited. Never zero: with nothing selected every
+    // control on the page would edit nothing, which is not a state worth being
+    // able to reach.
+    quint8 m_selection = 0xFF;
     bool m_autoApply    = true;
     bool m_pending      = false;
 
     QString m_status;
     bool    m_statusIsError = false;
+    QString m_lastOpenError;
 
     QVector<QColor> m_customColours;
     QVariantList    m_logBacklog;
+
+    QStringList m_profiles;
+    QString     m_activeProfile;
 
     bool m_detecting  = false;
     int  m_detectZone = 0;
@@ -239,5 +343,10 @@ private:
     QColor  m_lampColour  = QColor(0, 128, 255);
     bool    m_autonomous  = true;
 
+    Config::WindowState m_window;
+    bool                m_savesWindow = true;
+
     QTimer m_flushTimer;
+    QTimer m_watchTimer;
+    QTimer m_saveTimer;
 };

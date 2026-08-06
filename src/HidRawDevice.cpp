@@ -98,8 +98,20 @@ bool HidRawDevice::open(const QString &path, QString *error)
 
     const int fd = ::open(path.toLocal8Bit().constData(), O_RDWR);
     if (fd < 0) {
-        if (error)
+        const int err = errno;
+        if (error) {
             *error = QStringLiteral("打开 %1 失败: %2").arg(path, errnoText());
+            // By far the most common first-run failure: the node exists and was
+            // matched correctly, the user just has no access to it. Saying so
+            // beats leaving them to work out what "Permission denied" wants.
+            if (err == EACCES || err == EPERM) {
+                *error += QStringLiteral(
+                    "。需要安装 udev 规则：sudo cp udev/99-rgbfusion2.rules "
+                    "/etc/udev/rules.d/ && sudo udevadm control --reload-rules "
+                    "&& sudo udevadm trigger --subsystem-match=hidraw"
+                    "（装好后重新插拔或重启一次）");
+            }
+        }
         return false;
     }
 
