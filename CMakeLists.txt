@@ -112,6 +112,18 @@ if(BUILD_TESTING)
         target_link_libraries(tst_protocol PRIVATE Qt6::Test Qt6::Gui)
         target_compile_options(tst_protocol PRIVATE -Wall -Wextra)
         add_test(NAME protocol COMMAND tst_protocol)
+
+        # Config touches only QSettings and runs with QStandardPaths in test
+        # mode, so it needs neither the hardware nor the user's real config.
+        add_executable(tst_config
+            tests/tst_config.cpp
+            src/Config.cpp
+            src/RgbFusion2.cpp
+            src/HidRawDevice.cpp
+        )
+        target_link_libraries(tst_config PRIVATE Qt6::Test Qt6::Gui)
+        target_compile_options(tst_config PRIVATE -Wall -Wextra)
+        add_test(NAME config COMMAND tst_config)
     else()
         message(STATUS "Qt6Test not found - skipping tests")
     endif()

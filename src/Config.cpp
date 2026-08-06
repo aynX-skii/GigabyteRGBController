@@ -29,23 +29,10 @@ RgbFusion2::Mode modeFromKey(const QString &s)
     return RgbFusion2::Mode::Static;
 }
 
-} // namespace
-
-QString Config::path()
+// The zone block is written both at the top level (the live state) and inside
+// each profile group, so the field list lives in one place.
+void writeZones(QSettings &s, const ZoneSetting zones[RgbFusion2::kZoneCount])
 {
-    const QString dir =
-        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    // Note: this moved from "gcc-linux" with the rename to GigabyteRGBController.
-    // Configs written under the old directory are not read; users who ran the
-    // probe wizard before the rename must move the file or re-run the wizard.
-    return dir + QStringLiteral("/GigabyteRGBController/zones.ini");
-}
-
-void Config::save(const ZoneSetting zones[RgbFusion2::kZoneCount])
-{
-    QSettings s(path(), QSettings::IniFormat);
-    s.setValue(QStringLiteral("version"), 1);
-
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
         const ZoneSetting &z = zones[i];
         s.beginGroup(QStringLiteral("zone%1").arg(i));
@@ -60,16 +47,10 @@ void Config::save(const ZoneSetting zones[RgbFusion2::kZoneCount])
         s.setValue(QStringLiteral("name"), z.name);
         s.endGroup();
     }
-    s.sync();
 }
 
-bool Config::load(ZoneSetting zones[RgbFusion2::kZoneCount])
+void readZones(QSettings &s, ZoneSetting zones[RgbFusion2::kZoneCount])
 {
-    if (!QFileInfo::exists(path()))
-        return false;
-
-    QSettings s(path(), QSettings::IniFormat);
-
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
         ZoneSetting &z = zones[i];
         s.beginGroup(QStringLiteral("zone%1").arg(i));
@@ -88,7 +69,172 @@ bool Config::load(ZoneSetting zones[RgbFusion2::kZoneCount])
         z.name      = s.value(QStringLiteral("name")).toString();
         s.endGroup();
     }
+}
+
+// Profiles live in numbered groups with the name as a key inside, rather than
+// in the group name itself: a profile may be called anything, and INI group
+// names cannot hold everything a user might type.
+const QString kProfilePrefix = QStringLiteral("profile");
+
+QString profileGroupFor(QSettings &s, const QString &name)
+{
+    const QStringList groups = s.childGroups();
+    for (const QString &g : groups) {
+        if (!g.startsWith(kProfilePrefix))
+            continue;
+        if (s.value(g + QStringLiteral("/name")).toString() == name)
+            return g;
+    }
+    return QString();
+}
+
+} // namespace
+
+void ZoneSetting::setMode(RgbFusion2::Mode m)
+{
+    mode    = m;
+    managed = true;
+
+    const int cap = RgbFusion2::maxBrightness(m);
+    if (cap > 0 && brightness > cap)
+        brightness = cap;
+    // The floor of a pulsing effect can never sit above its ceiling; clamping
+    // it here means no caller has to remember the ordering.
+    if (minBrightness > brightness)
+        minBrightness = brightness;
+}
+
+namespace {
+QString g_pathOverride;
+}
+
+void Config::setPath(const QString &file)
+{
+    g_pathOverride = file;
+}
+
+QString Config::path()
+{
+    if (!g_pathOverride.isEmpty())
+        return g_pathOverride;
+
+    const QString dir =
+        QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
+    // Note: this moved from "gcc-linux" with the rename to GigabyteRGBController.
+    // Configs written under the old directory are not read; users who ran the
+    // probe wizard before the rename must move the file or re-run the wizard.
+    return dir + QStringLiteral("/GigabyteRGBController/zones.ini");
+}
+
+void Config::save(const ZoneSetting zones[RgbFusion2::kZoneCount])
+{
+    QSettings s(path(), QSettings::IniFormat);
+    s.setValue(QStringLiteral("version"), 1);
+    writeZones(s, zones);
+    s.sync();
+}
+
+bool Config::load(ZoneSetting zones[RgbFusion2::kZoneCount])
+{
+    if (!QFileInfo::exists(path()))
+        return false;
+
+    QSettings s(path(), QSettings::IniFormat);
+    readZones(s, zones);
     return true;
+}
+
+// ---- profiles --------------------------------------------------------------
+
+QStringList Config::profileNames()
+{
+    if (!QFileInfo::exists(path()))
+        return {};
+
+    QSettings s(path(), QSettings::IniFormat);
+    QStringList out;
+    // childGroups() comes back sorted, and profile0..N sorts as text - which is
+    // wrong at ten profiles, but the order only has to be stable, not numeric.
+    const QStringList groups = s.childGroups();
+    for (const QString &g : groups) {
+        if (!g.startsWith(kProfilePrefix))
+            continue;
+        const QString name = s.value(g + QStringLiteral("/name")).toString();
+        if (!name.isEmpty())
+            out << name;
+    }
+    return out;
+}
+
+void Config::saveProfile(const QString &name,
+                         const ZoneSetting zones[RgbFusion2::kZoneCount])
+{
+    if (name.isEmpty())
+        return;
+
+    QSettings s(path(), QSettings::IniFormat);
+
+    QString group = profileGroupFor(s, name);
+    if (group.isEmpty()) {
+        // First free index, so deleting a profile in the middle does not leave
+        // a gap that the next save skips over.
+        int n = 0;
+        while (s.childGroups().contains(kProfilePrefix + QString::number(n)))
+            ++n;
+        group = kProfilePrefix + QString::number(n);
+    }
+
+    s.beginGroup(group);
+    s.setValue(QStringLiteral("name"), name);
+    writeZones(s, zones);
+    s.endGroup();
+    s.sync();
+}
+
+bool Config::loadProfile(const QString &name, ZoneSetting zones[RgbFusion2::kZoneCount])
+{
+    if (!QFileInfo::exists(path()))
+        return false;
+
+    QSettings s(path(), QSettings::IniFormat);
+    const QString group = profileGroupFor(s, name);
+    if (group.isEmpty())
+        return false;
+
+    s.beginGroup(group);
+    readZones(s, zones);
+    s.endGroup();
+    return true;
+}
+
+void Config::removeProfile(const QString &name)
+{
+    QSettings s(path(), QSettings::IniFormat);
+    const QString group = profileGroupFor(s, name);
+    if (group.isEmpty())
+        return;
+    s.remove(group);
+    if (s.value(QStringLiteral("activeProfile")).toString() == name)
+        s.remove(QStringLiteral("activeProfile"));
+    s.sync();
+}
+
+QString Config::activeProfile()
+{
+    if (!QFileInfo::exists(path()))
+        return {};
+    QSettings s(path(), QSettings::IniFormat);
+    return s.value(QStringLiteral("activeProfile")).toString();
+}
+
+void Config::setActiveProfile(const QString &name)
+{
+    QSettings s(path(), QSettings::IniFormat);
+    if (name.isEmpty())
+        s.remove(QStringLiteral("activeProfile"));
+    else
+        s.setValue(QStringLiteral("activeProfile"), name);
+    s.sync();
 }
 
 void Config::saveCustomColours(const QVector<QColor> &colours)
@@ -121,6 +267,43 @@ QVector<QColor> Config::loadCustomColours()
     }
     s.endGroup();
     return out;
+}
+
+void Config::saveWindow(const WindowState &w)
+{
+    QSettings s(path(), QSettings::IniFormat);
+    s.beginGroup(QStringLiteral("window"));
+    // A maximised window's own geometry is the screen, which is not what should
+    // come back on restore - callers pass the last windowed rectangle instead.
+    if (w.geometry.isValid()) {
+        s.setValue(QStringLiteral("x"), w.geometry.x());
+        s.setValue(QStringLiteral("y"), w.geometry.y());
+        s.setValue(QStringLiteral("width"), w.geometry.width());
+        s.setValue(QStringLiteral("height"), w.geometry.height());
+    }
+    s.setValue(QStringLiteral("maximized"), w.maximized);
+    s.endGroup();
+    s.sync();
+}
+
+Config::WindowState Config::loadWindow()
+{
+    WindowState w;
+    if (!QFileInfo::exists(path()))
+        return w;
+
+    QSettings s(path(), QSettings::IniFormat);
+    s.beginGroup(QStringLiteral("window"));
+    const int width  = s.value(QStringLiteral("width"), 0).toInt();
+    const int height = s.value(QStringLiteral("height"), 0).toInt();
+    if (width > 0 && height > 0) {
+        w.geometry = QRect(s.value(QStringLiteral("x"), 0).toInt(),
+                           s.value(QStringLiteral("y"), 0).toInt(),
+                           width, height);
+    }
+    w.maximized = s.value(QStringLiteral("maximized"), false).toBool();
+    s.endGroup();
+    return w;
 }
 
 bool Config::apply(RgbFusion2 &rgb, const ZoneSetting zones[RgbFusion2::kZoneCount],
