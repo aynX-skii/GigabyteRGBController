@@ -66,6 +66,9 @@ qt_add_qml_module(GigabyteRGBController
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
+        qml/TitleBar.qml
+        qml/WindowButton.qml
+        qml/WindowResizeBorder.qml
         qml/Card.qml
         qml/ModalCard.qml
         qml/PillButton.qml
