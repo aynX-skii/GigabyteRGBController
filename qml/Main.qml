@@ -10,7 +10,10 @@ ApplicationWindow {
     id: window
 
     width: 1100
-    height: 880
+    // Tall enough that the effect panel shows its whole colour column - wheel,
+    // fields, both swatch rows and the hint under them - without scrolling.
+    // Measured against the tallest effect page; 880 clipped the custom swatches.
+    height: 940
     minimumWidth: 900
     minimumHeight: 700
     visible: true
