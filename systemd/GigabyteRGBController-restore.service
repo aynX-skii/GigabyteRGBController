@@ -9,9 +9,10 @@ PartOf=graphical-session.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# The controller can take a moment to enumerate after a cold boot.
-ExecStartPre=/usr/bin/sleep 3
-ExecStart=/usr/local/bin/GigabyteRGBController --restore
+# --wait polls for the controller rather than guessing how long a cold boot
+# needs to enumerate it: it returns the moment the device is there, and gives
+# up instead of hanging the session if it never appears.
+ExecStart=/usr/local/bin/GigabyteRGBController --restore --wait 20
 # Turning the lighting off on shutdown is optional; drop this line to keep the
 # last colour while the machine is powered down.
 # ExecStop=/usr/local/bin/GigabyteRGBController --set off

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Gigabyte RGB Controller</title>
+  <!-- A controller chip with its pins, holding one red, one green and one blue
+       lamp. Drawn on a dark badge so it keeps its contrast on both a light and
+       a dark panel, and stays readable down to 16 px. -->
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#16181c"/>
+
+  <g stroke="#f36d21" stroke-width="6" stroke-linecap="round" fill="none">
+    <!-- pins -->
+    <path d="M20 48h14M20 64h14M20 80h14"/>
+    <path d="M94 48h14M94 64h14M94 80h14"/>
+    <path d="M48 20v14M64 20v14M80 20v14"/>
+    <path d="M48 94v14M64 94v14M80 94v14"/>
+    <!-- package -->
+    <rect x="34" y="34" width="60" height="60" rx="12"/>
+  </g>
+
+  <g>
+    <circle cx="46" cy="64" r="7" fill="#ff4136"/>
+    <circle cx="64" cy="64" r="7" fill="#3fb950"/>
+    <circle cx="82" cy="64" r="7" fill="#2e9bff"/>
+  </g>
+</svg>

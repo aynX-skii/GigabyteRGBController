@@ -102,6 +102,19 @@ target_compile_definitions(GigabyteRGBController PRIVATE
 install(TARGETS GigabyteRGBController RUNTIME DESTINATION bin)
 install(FILES udev/99-rgbfusion2.rules DESTINATION lib/udev/rules.d)
 install(FILES desktop/GigabyteRGBController.desktop DESTINATION share/applications)
+# The desktop entry's Icon= key resolves through the icon theme, so the file has
+# to land in hicolor under the same name - that is also what the compositor
+# looks up from the window's app ID.
+install(FILES icons/GigabyteRGBController.svg
+        DESTINATION share/icons/hicolor/scalable/apps)
+
+# Installed but not enabled - `systemctl enable` is the user's call. The login
+# restore is a user unit (the hidraw ACL follows the session); the resume one
+# has to be a system unit, because sleep targets exist only there.
+install(FILES systemd/GigabyteRGBController-restore.service
+        DESTINATION lib/systemd/user)
+install(FILES systemd/GigabyteRGBController-resume@.service
+        DESTINATION lib/systemd/system)
 
 # ---- tests ------------------------------------------------------------------
 # Protocol-only; they need neither a display nor the hardware.

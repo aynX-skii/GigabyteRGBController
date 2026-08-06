@@ -45,13 +45,47 @@ LampArray 比厂商协议的 8 区域**更粗**，它的价值在于协议标准
 
 ## 构建
 
-需要 Qt 6.5 以上，模块 `Core` `Gui` `Qml` `Quick` `QuickControls2` `QuickLayouts`
-（Debian/Ubuntu：`qt6-base-dev` `qt6-declarative-dev`）。
+需要 Qt 6.5 以上，模块 `Core` `DBus` `Gui` `Qml` `Quick` `QuickControls2`
+`QuickLayouts`（Debian/Ubuntu：`qt6-base-dev` `qt6-declarative-dev`）。
+`DBus` 只用来听 logind 的睡眠/唤醒信号，它随 qtbase 一起来，不是额外的包。
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
+
+## 安装
+
+`cmake --install` 的参数是**构建目录**，不是安装目录；装到哪由
+`CMAKE_INSTALL_PREFIX` 决定，默认 `/usr/local`：
+
+```bash
+sudo cmake --install build
+```
+
+会装五样东西，落点都在系统默认会扫描的路径下（`/usr/local/lib/udev/rules.d`、
+`/usr/local/lib/systemd/{system,user}`、`XDG_DATA_DIRS` 里的 `/usr/local/share`
+——可以用 `systemd-analyze unit-paths` 和 `man udev` 自行核对）：
+
+| 文件 | 落点 | 作用 |
+| ---- | ---- | ---- |
+| 程序 | `bin/` | 也是两个 systemd 单元里 `ExecStart` 写死的路径 |
+| `99-rgbfusion2.rules` | `lib/udev/rules.d/` | hidraw 权限 |
+| `GigabyteRGBController.desktop` | `share/applications/` | 应用菜单 |
+| `GigabyteRGBController.svg` | `share/icons/hicolor/scalable/apps/` | 图标 |
+| 两个 `.service` | `lib/systemd/{user,system}/` | 登录 / 唤醒后恢复，**装而不启用** |
+
+**文件到位不等于生效**，三样各自要激活一次：
+
+```bash
+sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw
+systemctl --user daemon-reload && systemctl --user enable --now GigabyteRGBController-restore.service
+sudo systemctl daemon-reload   && sudo systemctl enable GigabyteRGBController-resume@$USER.service
+```
+
+图标那一步不能省：Wayland 靠应用 ID（取自 `QGuiApplication::setDesktopFileName()`）
+反查 desktop 入口，再由入口的 `Icon=` 反查图标——少一环任务栏就只能显示一个通用
+方块。
 
 ## 测试
 
@@ -60,12 +94,15 @@ cmake --build build -j$(nproc)
 可以脱离硬件断言每一个字节：
 
 ```bash
-cd build && ctest --output-on-failure
+ctest --test-dir build --output-on-failure
 ```
 
-36 项测试，不需要硬件也不需要显示服务器。其中
+两个套件共 56 项，不需要硬件也不需要显示服务器。协议部分 36 项，其中
 `parsesRealInfoReport` 用的是从本机 IT5701 抓下来的真实 64 字节应答，
-是唯一独立于实现的判据。
+是唯一独立于实现的判据；配置部分 20 项，覆盖 `zones.ini` 的往返、方案的
+增删改与命名边界、自定义色板与窗口几何的互不干扰，以及切换灯效时的亮度上限
+收敛（`ZoneSetting::setMode`）。配置测试跑在 `QStandardPaths` 的测试模式下，
+写不到真实的 `~/.config`——第一条断言就在盯这件事。
 
 测试写完后做过变异验证——故意引入 6 个错误（颜色字节序改成 RGB、
 `MinBrightness` 偏移错位、时序块错位、双闪次数写成 1、`ProductString`
@@ -73,23 +110,37 @@ cd build && ctest --output-on-failure
 
 ## 权限设置
 
-控制器的 hidraw 节点默认只有 root 可访问。安装 udev 规则后即可以普通用户运行：
+控制器的 hidraw 节点默认只有 root 可访问。安装 udev 规则后即可以普通用户运行
+（跑过 `sudo cmake --install build` 的话规则已经在 `/usr/local/lib/udev/rules.d/`
+了，只需要下面后两条重新加载）：
 
 ```bash
-sudo cp udev/99-rgbfusion2.rules /etc/udev/rules.d/
+sudo cp udev/99-rgbfusion2.rules /etc/udev/rules.d/   # 未安装时手动放一份
 sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
 规则使用 `TAG+="uaccess"`，权限授予当前本地登录会话的用户，比固定 group 更安全。
 
+没装规则时程序不会只甩一句 `Permission denied`——识别到 `EACCES` 会把上面这三条
+命令直接写进**设备栏**（红色那行，连接指示灯变红时你会看的地方）、状态栏和协议
+日志。太长显示不下的部分悬停可见。
+
 ## 使用
 
 ```bash
-./build/GigabyteRGBController            # 图形界面
-./build/GigabyteRGBController --probe    # 无界面自检
-./build/GigabyteRGBController --set ...  # 无界面设置灯效
+./build/GigabyteRGBController                  # 图形界面
+./build/GigabyteRGBController --probe          # 无界面自检
+./build/GigabyteRGBController --set ...        # 无界面设置灯效
+./build/GigabyteRGBController --profile 夜间   # 无界面套用某个方案
+./build/GigabyteRGBController --list-profiles  # 列出方案
+./build/GigabyteRGBController --version        # 版本号
 ```
+
+**这个程序不需要常驻。** 灯效设好之后是写进控制器的，程序退出灯照样亮——所以它
+没有托盘图标，也不该留在后台。真正需要它的是几个"关键时刻"：登录后、休眠唤醒后、
+以及你想换个灯效的时候。前两个交给下面的 systemd 单元，第三个用 `--profile`
+绑个快捷键就够了。
 
 ### 图形界面
 
@@ -119,15 +170,35 @@ Qt Quick 实现，深色 + 橙色强调，分三页：**硬件效果**、**标�
   按钮、四边四角的缩放热区都是自己画的，桌面环境不再往这套扁平暗色界面上盖一条
   自己主题的标题栏。拖动与缩放都交给 `startSystemMove()` / `startSystemResize()`
   由合成器执行——这是 Wayland 下唯一可行的做法，也顺带白拿了贴边分屏。
+  窗口大小与最大化状态记在配置文件里：边框既然归自己画，就没有会话管理器
+  替我们记了（Wayland 不允许应用自己定位窗口，所以坐标只在 X11 下生效）。
+- **方案**：页面顶部一排芯片，每个是八个区域的完整快照，一键切换；详见
+  下面的「配置持久化」。
+- **快捷键**：`Ctrl+1/2/3` 切页、`Ctrl+R` 重新扫描、`Ctrl+Enter` 应用、
+  `F11` 最大化、`Ctrl+Q`/`Ctrl+W` 退出、`Esc` 关闭对话框
+  （探测向导进行中按 `Esc` 等于「停止」，会把灯效恢复回去）。
+- **断线自愈**：每 3 秒检查一次 hidraw 节点还在不在。拔插或休眠唤醒后
+  `/dev/hidrawN` 编号会变，旧的 fd 只会开始报错——此时连接指示灯会如实变红，
+  设备重新出现后自动重连；开着「自动应用」就顺带把保存的灯效推回去，
+  因为重新枚举的控制器里什么都没剩下。休眠唤醒另有一条 logind 信号兜底，
+  见下面的「休眠唤醒」。
+- **单实例**：第二次启动不会再开一个窗口，而是通过 `/tmp` 下的本地套接字
+  请求已在运行的那个显示出来——两份进程会抢同一颗控制器和同一个配置文件。
 - **颜色**：HSV 色环（色相=角度，饱和度=半径）+ R/G/B/十六进制输入框 + 预设色板。
   色环故意不带明度轴——在这颗控制器上"多亮"是 `MaxBrightness` 字段，
   再放一个明度轴就会和亮度滑杆打架。
 - **自定义色板**：点空位保存当前颜色，右键清除，存在配置文件的 `[custom]` 段。
 - **区域**：八个区域各有三种状态——未探测（暗边框）、已探测无灯（斜杠）、
   有灯（显示当前颜色）。"未探测"和"确认没灯"分开画，否则没法知道探测跑没跑过。
+  选择是一个位掩码：点击选中单个，**Ctrl+点击**加选/减选，「全部」回到八个全选。
+  选中多个时按钮会说「应用到3个区域」。橙色选中环只在**部分选中**时画——
+  八个全选时整排都套环等于什么都没说，那个状态由左边的「全部」芯片表示。
 - **探测向导**：不再是一串模态框，而是一次一问的浮层，答题时主板始终可见。
+- **协议日志**：可按关键字过滤、可只看错误，右上角能把**当前筛选结果**复制到
+  剪贴板或导出成文本——贴进 issue 的应该正是屏幕上看到的那些行。
 - **自动应用**：默认开，改动经 120 ms 防抖后直接下发，拖滑杆能实时看到效果；
-  关掉则回到手动点"应用"。
+  关掉则回到手动点"应用"。配置落盘另有一层 1 秒防抖：拖一次滑杆没必要把整个
+  ini 重写几十遍，退出时会把没写完的那次补上。
 - **应用按钮带状态**：有改动没下发时是橙色可点，下发成功后变灰显示"已应用"，
   再改动又亮起——所以它的颜色回答的是"还有没有东西没发出去"。
   刚启动时如果配置里有已管理的区域，它是亮的：完整断电会清空控制器，而控制器
@@ -178,23 +249,73 @@ GigabyteRGBController --restore
 同一个文件里还有一个 `[custom]` 段，存图形界面的自定义色板。它和区域状态分开存，
 因为 `--set` 只重写效果字段，色板必须活下来。
 
+三个全局选项对所有子命令都生效：
+
+| 选项 | 用途 |
+| ---- | ---- |
+| `--config <文件>` | 指定配置文件 |
+| `--user <用户名>` | 改用该用户的配置（`getpwnam` 解析家目录）；唤醒恢复的 root 单元靠它 |
+| `--wait <秒>` | 控制器还没枚举出来时轮询等待，到点放弃 |
+
+### 方案（多套灯效）
+
+`[profileN]` 段里存的是**八个区域的整份快照**，界面上方一排芯片就是它们：
+点一下切换，「保存」把当前设置写回选中的方案，「另存为」新建，右键芯片删除
+（有确认框）。切换方案**不会**自动保存被切走的那一份——方案是你存下来的样子，
+不是你后来调成的样子。
+
+方案名存成段内的 `name=` 键而不是段名，所以名字里带 `/`、`=`、空格、方括号
+都不会破坏文件（测试里专门有一条盯着这个）。
+
+方案也能脱离界面用——这才是它对"不常驻"这种用法的真正价值：
+
+```bash
+GigabyteRGBController --list-profiles      # * 标记当前方案
+GigabyteRGBController --profile 夜间       # 套用并记为当前
+```
+
+绑到快捷键上，换灯效就是按一下，界面完全不用开。
+
 > 目录名早先是 `gcc-linux`，现已随项目改名为 `GigabyteRGBController`。程序**不会**
 > 读旧路径，所以在改名前跑过探测向导的话，那份区域探测结果不会自动带过来。手动迁移：
 > `mv ~/.config/gcc-linux ~/.config/GigabyteRGBController`，否则就重跑一遍向导。
 
-开机自动恢复：
+登录后自动恢复（`cmake --install` 已经把单元放好了，见上面的「安装」）：
 
 ```bash
-sudo install -m755 build/GigabyteRGBController /usr/local/bin/
-mkdir -p ~/.config/systemd/user
-cp systemd/GigabyteRGBController-restore.service ~/.config/systemd/user/
-systemctl --user daemon-reload
 systemctl --user enable --now GigabyteRGBController-restore.service
 ```
+
+没装的话，把 `systemd/GigabyteRGBController-restore.service` 拷到
+`~/.config/systemd/user/` 再 `systemctl --user daemon-reload` 也一样。
+
+单元里用的是 `--restore --wait 20`：控制器冷启动后要一会儿才枚举出来，写死
+`sleep 3` 既可能白等也可能不够，`--wait` 是轮询到设备出现就返回、到点还没有就
+放弃（不会把会话卡住）。
 
 用的是 **user unit** 而非 system unit：udev 规则通过 `TAG+="uaccess"` 把
 hidraw 节点授权给当前本地会话的用户，root 的 system service 反而拿不到
 这份 ACL 语义，跟着图形会话走更自然。
+
+### 休眠唤醒
+
+界面开着的时候不需要额外配置：程序订阅了 logind 的
+`org.freedesktop.login1.Manager.PrepareForSleep`，唤醒后等 2 秒把保存的灯效重新
+下发（控制器可能在挂起期间断电，而它没有读回当前效果的命令，所以只能重推）。
+订阅失败会在协议日志里说一句，不会静悄悄地不工作。
+
+但按上面说的，这个程序本来就不该常驻，所以真正管用的是那个 systemd 单元。它必须
+是 **system unit**——`suspend.target` 这些只存在于系统 manager，用户 manager 里
+没有（systemd 259 实测如此）。做成了模板单元，不用改文件，用户名写在 enable
+命令里：
+
+```bash
+sudo systemctl enable GigabyteRGBController-resume@$USER.service
+```
+
+它以 root 运行，靠 `--user <名字>` 找到你的配置——通过 `getpwnam` 解析家目录，
+而不是假设它一定在 `/home/<名字>`。root 能直接打开 hidraw 节点，不受 udev 那条
+`uaccess` ACL 的影响。
 
 `--probe` 是排查问题的第一步，它会列出所有 hidraw 节点并标出两个接口各在哪：
 

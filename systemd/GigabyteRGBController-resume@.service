@@ -1,0 +1,23 @@
+[Unit]
+Description=Restore Gigabyte RGB Fusion lighting for %I after resume
+Documentation=https://github.com/
+# Sleep targets exist only in the system manager - there is no user-level
+# suspend.target to hook - so this runs as root and is told whose settings to
+# restore. Enable it with the account name:
+#
+#   sudo cp GigabyteRGBController-resume@.service /etc/systemd/system/
+#   sudo systemctl enable GigabyteRGBController-resume@$USER.service
+#
+# Nothing to edit: %i is the user name from the unit instance, and --user
+# resolves their home through getpwnam rather than assuming /home/<name>.
+After=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+
+[Service]
+Type=oneshot
+# The controller re-enumerates on the way back up, so --wait polls for it
+# instead of guessing with a fixed sleep: it returns as soon as the device is
+# there, and gives up rather than hanging the sleep target if it never is.
+ExecStart=/usr/local/bin/GigabyteRGBController --restore --user %i --wait 20
+
+[Install]
+WantedBy=suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
