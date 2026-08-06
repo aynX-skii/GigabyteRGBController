@@ -11,6 +11,11 @@ Item {
     property bool   show: false
     property int    cardWidth: 420
 
+    // Escape. Left to the owner rather than just hiding, because "get me out of
+    // here" means different things per dialog - the detection wizard has a
+    // running probe to stop and lighting to put back.
+    signal dismissed()
+
     default property alias body: bodyColumn.data
 
     anchors.fill: parent
@@ -19,6 +24,13 @@ Item {
     z: 1000
 
     Behavior on opacity { NumberAnimation { duration: Theme.anim } }
+
+    // Only the dialog that is up claims the key, so several of these can coexist.
+    Shortcut {
+        sequence: "Escape"
+        enabled: root.show
+        onActivated: root.dismissed()
+    }
 
     // Swallows clicks so the UI underneath cannot be operated while a dialog
     // is up, and dims it to make that obvious.

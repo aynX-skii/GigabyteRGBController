@@ -85,6 +85,7 @@ qt_add_qml_module(GigabyteRGBController
         qml/ColorFields.qml
         qml/Swatches.qml
         qml/ZoneBar.qml
+        qml/ProfileBar.qml
         qml/LampArrayPage.qml
 )
 

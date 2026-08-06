@@ -16,6 +16,7 @@ Item {
     readonly property bool maximized: win && win.visibility === Window.Maximized
 
     property string title
+    property string version
 
     implicitHeight: 40
 
@@ -58,11 +59,20 @@ Item {
         }
 
         Text {
-            Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
+            Layout.maximumWidth: root.width - 260
             text: root.title
             color: Theme.textDim
             font.pixelSize: Theme.fontSmall
+            elide: Text.ElideRight
+        }
+
+        Text {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            text: root.version ? "v" + root.version : ""
+            color: Theme.textFaint
+            font.pixelSize: 11
             elide: Text.ElideRight
         }
 

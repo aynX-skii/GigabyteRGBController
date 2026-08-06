@@ -11,9 +11,20 @@ Item {
     property string text
     property bool   show: false
 
+    // Past this the bubble wraps instead of growing: a long line - the udev
+    // hint on a permission failure, say - would otherwise be wider than the
+    // window it is trying to explain itself in.
+    property int maxWidth: 420
+
+    // Above by default; `below` is for anything near the top of the window,
+    // where a bubble hanging upwards would land on the title bar.
+    property bool below: false
+
     anchors.horizontalCenter: parent ? parent.horizontalCenter : undefined
-    anchors.bottom: parent ? parent.top : undefined
+    anchors.bottom: (parent && !root.below) ? parent.top : undefined
+    anchors.top: (parent && root.below) ? parent.bottom : undefined
     anchors.bottomMargin: 8
+    anchors.topMargin: 8
 
     implicitWidth: bubble.width
     implicitHeight: bubble.height
@@ -25,7 +36,9 @@ Item {
 
     Rectangle {
         id: bubble
-        width: label.implicitWidth + 20
+        // implicitWidth is the unwrapped width, so this settles in one pass:
+        // the height below follows from the width, never the other way round.
+        width: Math.min(label.implicitWidth, root.maxWidth) + 20
         height: label.implicitHeight + 14
         radius: Theme.radiusSmall
         color: "#0d0f12"
@@ -35,10 +48,12 @@ Item {
         Text {
             id: label
             anchors.centerIn: parent
+            width: bubble.width - 20
             text: root.text
             color: Theme.text
             font.pixelSize: 11
             lineHeight: 1.25
+            wrapMode: Text.WordWrap
             horizontalAlignment: Text.AlignHCenter
         }
     }

@@ -21,15 +21,20 @@ ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 10
 
+                // implicit rather than plain width/height: a layout-managed item
+                // that sets its size directly is left out of the vertical
+                // alignment, which is what had the dot riding above the line.
                 Rectangle {
-                    width: 10
-                    height: 10
+                    Layout.alignment: Qt.AlignVCenter
+                    implicitWidth: 10
+                    implicitHeight: 10
                     radius: 5
                     color: Ctl.lampConnected ? Theme.ok : Theme.danger
                 }
 
                 Text {
                     Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
                     text: Ctl.lampInfo
                     color: Theme.textDim
                     font.pixelSize: Theme.fontSmall
@@ -44,7 +49,7 @@ ColumnLayout {
 
             Rectangle {
                 Layout.fillWidth: true
-                height: 1
+                Layout.preferredHeight: 1
                 color: Theme.borderSoft
             }
 

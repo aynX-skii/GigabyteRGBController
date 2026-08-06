@@ -19,9 +19,20 @@ ColumnLayout {
         spacing: 10
 
         Text {
+            Layout.alignment: Qt.AlignBaseline
             text: "区域"
             color: Theme.textDim
             font.pixelSize: Theme.fontSmall
+        }
+
+        // Multi-select is not a gesture anyone tries unprompted on a row of
+        // chips, so it says so.
+        Text {
+            Layout.alignment: Qt.AlignBaseline
+            Layout.leftMargin: 2
+            text: "Ctrl+点击可多选"
+            color: Theme.textFaint
+            font.pixelSize: 11
         }
 
         Item { Layout.fillWidth: true }
@@ -43,15 +54,17 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 6
 
-        // "All zones" is the default, and the only way to set every zone at
-        // once - including the ones with nothing plugged in.
+        // "All zones" is the default, and the quickest way back to setting every
+        // zone at once - including the ones with nothing plugged in.
         Rectangle {
+            readonly property bool isAll: Ctl.selectionMask === 0xFF
+
             Layout.preferredWidth: 56
             Layout.preferredHeight: 46
             radius: Theme.radiusSmall
-            color: Ctl.selectedZone < 0 ? Theme.accentSoft : Theme.cardAlt
-            border.width: Ctl.selectedZone < 0 ? 1.6 : 1
-            border.color: Ctl.selectedZone < 0 ? Theme.accent : Theme.border
+            color: isAll ? Theme.accentSoft : Theme.cardAlt
+            border.width: isAll ? 1.6 : 1
+            border.color: isAll ? Theme.accent : Theme.border
 
             Behavior on color        { ColorAnimation { duration: Theme.anim } }
             Behavior on border.color { ColorAnimation { duration: Theme.anim } }
@@ -59,12 +72,12 @@ ColumnLayout {
             Text {
                 anchors.centerIn: parent
                 text: "全部"
-                color: Ctl.selectedZone < 0 ? Theme.accent : Theme.textDim
+                color: parent.isAll ? Theme.accent : Theme.textDim
                 font.pixelSize: Theme.fontSmall
             }
 
             HoverHandler { cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: Ctl.selectedZone = -1 }
+            TapHandler { onTapped: Ctl.selectAllZones() }
         }
 
         Repeater {
@@ -74,7 +87,8 @@ ColumnLayout {
                 id: chip
                 required property var modelData
 
-                readonly property bool isSelected: Ctl.selectedZone === modelData.index
+                readonly property bool isSelected:
+                    (Ctl.selectionMask & (1 << modelData.index)) !== 0
                 readonly property bool isEmpty: modelData.probed && !modelData.connected
 
                 Layout.preferredWidth: 46
@@ -123,6 +137,10 @@ ColumnLayout {
                     }
                 }
 
+                // Ringing all eight when "all" is selected turns the row into a
+                // wall of orange and says nothing: that state is already what
+                // the "全部" chip on the left is for. The ring is reserved for a
+                // partial selection, where it is the only way to see one.
                 Rectangle {
                     anchors.fill: parent
                     anchors.margins: -2.5
@@ -130,14 +148,25 @@ ColumnLayout {
                     color: "transparent"
                     border.width: 2
                     border.color: Theme.accent
-                    visible: chip.isSelected
+                    visible: chip.isSelected && Ctl.selectionMask !== 0xFF
                 }
 
                 HoverHandler {
                     id: chipHover
                     cursorShape: Qt.PointingHandCursor
                 }
-                TapHandler { onTapped: Ctl.selectedZone = chip.modelData.index }
+
+                // Two handlers rather than one plus a modifier test: a pointer
+                // handler carries no keyboard state, but it can be told which
+                // modifiers it answers to.
+                TapHandler {
+                    acceptedModifiers: Qt.NoModifier
+                    onTapped: Ctl.selectOnlyZone(chip.modelData.index)
+                }
+                TapHandler {
+                    acceptedModifiers: Qt.ControlModifier
+                    onTapped: Ctl.toggleZone(chip.modelData.index)
+                }
 
                 ToolTipBubble {
                     show: chipHover.hovered
