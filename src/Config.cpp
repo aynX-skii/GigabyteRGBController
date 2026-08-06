@@ -309,20 +309,36 @@ Config::WindowState Config::loadWindow()
 bool Config::apply(RgbFusion2 &rgb, const ZoneSetting zones[RgbFusion2::kZoneCount],
                    QString *error)
 {
-    int staged = 0;
+    QVector<int> managed;
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
-        const ZoneSetting &z = zones[i];
-        if (!z.managed)
-            continue;
-        if (!rgb.setZone(i, z.mode, z.colour, z.brightness, z.speed,
-                         z.minBrightness, error))
-            return false;
-        ++staged;
+        if (zones[i].managed)
+            managed.append(i);
     }
-    if (staged == 0) {
+    if (managed.isEmpty()) {
         if (error)
             *error = QStringLiteral("配置里没有已保存的区域");
         return false;
     }
-    return rgb.apply(error);
+
+    // This is the path a cold boot takes, and out of a cold boot the controller
+    // is still running the BIOS's own effects - staging an effect on top of one
+    // of those does not reliably displace it. Clear the registers first.
+    if (!rgb.takeOverZones(managed, error))
+        return false;
+
+    // Twice, because there is no way to read a zone back and confirm: the
+    // controller silently drops the occasional feature report when it is busy,
+    // which right after boot leaves one zone stuck on whatever it was showing.
+    // Restoring runs once per boot, so a second identical pass is free.
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i : managed) {
+            const ZoneSetting &z = zones[i];
+            if (!rgb.setZone(i, z.mode, z.colour, z.brightness, z.speed,
+                             z.minBrightness, error))
+                return false;
+        }
+        if (!rgb.apply(error))
+            return false;
+    }
+    return true;
 }

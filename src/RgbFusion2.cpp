@@ -99,12 +99,19 @@ RgbFusion2::RgbFusion2(QObject *parent)
 {
 }
 
-QByteArray RgbFusion2::buildCommandReport(uint8_t command)
+QByteArray RgbFusion2::buildCommandReport(uint8_t command, uint8_t arg0, uint8_t arg1)
 {
     QByteArray buf(kBufferLen, char(0));
     buf[0] = static_cast<char>(kReportId);
     buf[1] = static_cast<char>(command);
+    buf[2] = static_cast<char>(arg0);
+    buf[3] = static_cast<char>(arg1);
     return buf;
+}
+
+QByteArray RgbFusion2::buildZoneResetReport(int zone)
+{
+    return buildCommandReport(static_cast<uint8_t>(kZoneCmdBase + zone));
 }
 
 QByteArray RgbFusion2::buildInitReport()
@@ -402,4 +409,42 @@ bool RgbFusion2::scanStripHeader(int header, StripInfo *out, bool rescan, QStrin
 bool RgbFusion2::apply(QString *error)
 {
     return sendReport(buildApplyReport(), QStringLiteral("APPLY (0x28 0xFF)"), error);
+}
+
+bool RgbFusion2::takeOverZones(const QVector<int> &zones, QString *error)
+{
+    if (zones.isEmpty())
+        return true;
+
+    // Audio-beat mode makes the controller drive zones from the analogue input,
+    // and LampArray mode hands them to the Windows dynamic-lighting engine.
+    // Neither is anything this program uses, and either one left on would fight
+    // the effects staged below.
+    if (!sendReport(buildCommandReport(kCmdBeat, 0),
+                    QStringLiteral("BEAT off (0x31)"), error))
+        return false;
+    if (m_info.suppCmdFlag & kSuppLampArray) {
+        if (!sendReport(buildCommandReport(kCmdLampArray, 0),
+                        QStringLiteral("LAMPARRAY off (0x48)"), error))
+            return false;
+    }
+
+    for (int zone : zones) {
+        if (zone < 0 || zone >= kZoneCount)
+            continue;
+        if (!sendReport(buildZoneResetReport(zone),
+                        QStringLiteral("RESET 区域%1 (0x%2)")
+                            .arg(zone + 1)
+                            .arg(kZoneCmdBase + zone, 2, 16, QLatin1Char('0')),
+                        error))
+            return false;
+    }
+
+    if (!apply(error))
+        return false;
+
+    // The controller needs a moment to act on a mode change before it will take
+    // effects again; OpenRGB waits the same 50 ms after its own mode commands.
+    QThread::msleep(50);
+    return true;
 }

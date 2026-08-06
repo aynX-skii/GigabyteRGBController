@@ -50,6 +50,36 @@ private slots:
         QCOMPARE(quint8(apply.at(2)), quint8(0xFF));
     }
 
+    // ---- taking the zones back off the board's own effects ---------------
+
+    void modeCommandsCarryTheirArgument()
+    {
+        // 0xCC 0x31 0x00 (audio-beat off) and 0xCC 0x48 0x00 (LampArray off).
+        // The argument is byte 2, not byte 3 - swapping them silently leaves
+        // the mode on.
+        const QByteArray beat = RgbFusion2::buildCommandReport(RgbFusion2::kCmdBeat, 0);
+        QCOMPARE(quint8(beat.at(1)), quint8(0x31));
+        QCOMPARE(quint8(beat.at(2)), quint8(0x00));
+
+        const QByteArray lamp =
+            RgbFusion2::buildCommandReport(RgbFusion2::kCmdLampArray, 1);
+        QCOMPARE(quint8(lamp.at(1)), quint8(0x48));
+        QCOMPARE(quint8(lamp.at(2)), quint8(0x01));
+    }
+
+    void zoneResetIsTheZoneCommandWithAnEmptyPayload()
+    {
+        const QByteArray reset = RgbFusion2::buildZoneResetReport(2);
+        QCOMPARE(reset.size(), RgbFusion2::kBufferLen);
+        QCOMPARE(quint8(reset.at(0)), quint8(0xCC));
+        QCOMPARE(quint8(reset.at(1)), quint8(0x22));
+
+        // Unlike an effect report this leaves the zone-select byte at 0: it
+        // clears the register rather than writing an effect into it.
+        for (int i = 2; i < reset.size(); ++i)
+            QCOMPARE(quint8(reset.at(i)), quint8(0x00));
+    }
+
     // ---- zone addressing -------------------------------------------------
 
     void zoneCommandAndBitmask_data()

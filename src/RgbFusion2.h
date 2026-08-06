@@ -52,6 +52,16 @@ public:
     static constexpr uint8_t kZoneCmdBase   = 0x20; // zone i -> command 0x20 + i
     static constexpr uint8_t kApplyAllMask  = 0xFF;
 
+    // Global modes the board can come out of a cold boot already in, both of
+    // which leave the controller painting zones by itself. Names and values
+    // from OpenRGB's `RGBFusion2USBController` (EnableBeat / EnableLampArray).
+    static constexpr uint8_t kCmdBeat       = 0x31; // hardware audio-beat mode
+    static constexpr uint8_t kCmdLampArray  = 0x48; // HID LampArray (MSDL) mode
+
+    // SuppCmdFlag bit that says 0x48 is understood. Sending it blind to a
+    // controller that does not support it is what OpenRGB guards against here.
+    static constexpr uint8_t kSuppLampArray = 0x02;
+
     static constexpr int kZoneCount = 8;            // led1 .. led8
 
     enum class Mode {
@@ -108,6 +118,20 @@ public:
     // 0xCC 0x28 0xFF - tells the controller to latch everything staged so far.
     bool apply(QString *error = nullptr);
 
+    // Hands `zones` over from whatever the board is running on its own.
+    //
+    // Out of a cold boot the controller is still painting the BIOS's effects,
+    // and staging a zone does not reliably take that over - the chipset LED on
+    // a B760M AORUS ELITE keeps cycling through the boot rainbow while every
+    // other zone obeys. GIGABYTE's client and OpenRGB both clear the zone
+    // registers first, which is what this does: the global audio-beat and
+    // LampArray modes off, then every listed zone's register zeroed and
+    // latched. Call it before staging the effects you actually want.
+    //
+    // Zones not listed are left alone - a restore must not blank a zone the
+    // user never handed to us.
+    bool takeOverZones(const QVector<int> &zones, QString *error = nullptr);
+
     // ---- addressable (Gen2 ARGB) strip headers ---------------------------
     //
     // Each header is scanned with one command and its result read back with
@@ -146,7 +170,13 @@ public:
                                       int brightness, Speed speed, int minBrightness);
     static QByteArray buildApplyReport();
     static QByteArray buildInitReport();
-    static QByteArray buildCommandReport(uint8_t command);
+    static QByteArray buildCommandReport(uint8_t command, uint8_t arg0 = 0,
+                                         uint8_t arg1 = 0);
+
+    // A zone command with an all-zero payload: clears the register rather than
+    // writing an effect into it. Note the zone-select byte stays 0 here, which
+    // is what OpenRGB's ResetController() sends.
+    static QByteArray buildZoneResetReport(int zone);
 
     // Decodes an info report into DeviceInfo. Exposed for testing against
     // captured payloads.
