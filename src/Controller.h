@@ -269,9 +269,14 @@ private:
     // so the connection dot stops being a lie.
     void watchdogTick();
 
-    // Called when a write fails: decides whether that was a transient error or
-    // the device going away, and drops the handle in the latter case.
+    // Called when a write fails: decides whether that was a transient error,
+    // the device going away, or the controller firmware hanging, and drops the
+    // handle in the second case.
     void handleIoFailure(const QString &message);
+
+    // Reports the hang and shuts down every write path. Returns true when the
+    // caller should give up rather than carry on down its loop.
+    bool checkWedged();
 
     // Pushes the saved effects back out. Both the reconnect path and the
     // resume-from-suspend path need it: either way the controller is in its
@@ -325,6 +330,12 @@ private:
     quint8 m_selection = 0xFF;
     bool m_autoApply    = true;
     bool m_pending      = false;
+
+    // Set once the controller firmware has hung. Every later write is refused
+    // rather than attempted: it is not coming back without losing power, and
+    // the old behaviour - auto-apply retrying on every slider move - turned one
+    // red line into a screenful of them. Only a rescan clears it.
+    bool m_wedged = false;
 
     QString m_status;
     bool    m_statusIsError = false;

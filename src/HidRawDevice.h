@@ -3,6 +3,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QString>
 #include <QVector>
 
@@ -36,6 +37,16 @@ public:
 
     const QString &path() const { return m_path; }
 
+    // Smallest gap between two feature ioctls, in milliseconds. Anything below
+    // it is slept off before the next transfer goes out. Survives close() so a
+    // reopen does not silently go back to firing them back to back.
+    void setMinInterval(int ms) { m_minIntervalMs = ms; }
+
+    // errno from the last failed feature ioctl, 0 if the last one succeeded.
+    // Callers need the number rather than the message: EPROTO and ETIMEDOUT
+    // from this device mean something specific and unrecoverable.
+    int lastErrno() const { return m_lastErrno; }
+
     // HIDIOCSFEATURE / HIDIOCGFEATURE. `data` must already carry the report ID
     // in byte 0, which is how the hidraw feature ioctls expect it.
     bool sendFeatureReport(const QByteArray &data, QString *error = nullptr);
@@ -43,6 +54,13 @@ public:
                           QString *error = nullptr);
 
 private:
+    // Blocks until at least m_minIntervalMs has passed since the last transfer.
+    void pace();
+
     int     m_fd = -1;
     QString m_path;
+
+    int           m_minIntervalMs = 0;
+    QElapsedTimer m_sinceLastIo;
+    int           m_lastErrno = 0;
 };

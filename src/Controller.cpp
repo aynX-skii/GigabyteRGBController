@@ -148,6 +148,9 @@ void Controller::saveNow()
 void Controller::connectDevice()
 {
     m_rgb.close();
+    // A rescan is the one thing that can legitimately follow a power cycle, so
+    // it is also the only thing that clears the hang.
+    m_wedged = false;
 
     QString error;
     if (!m_rgb.openFirstDevice(&error)) {
@@ -226,7 +229,11 @@ void Controller::watchdogTick()
         // Nothing of the previous state survives in the controller, so whatever
         // is on screen counts as unsent again.
         setPending(hasManagedZones());
-        setStatus(QStringLiteral("控制器已断开（%1 消失），正在等待重新出现…").arg(gone), true);
+        // A hung controller usually takes its node with it a moment later, and
+        // "waiting for it to come back" is the wrong thing to leave on screen -
+        // it is not coming back on its own. checkWedged() already said so.
+        if (!m_wedged)
+            setStatus(QStringLiteral("控制器已断开（%1 消失），正在等待重新出现…").arg(gone), true);
         return;
     }
 
@@ -240,13 +247,17 @@ void Controller::watchdogTick()
         return;
     }
 
+    // An INIT that answers means this is a controller that has been through a
+    // power cycle, not the hung one wearing the same node.
+    m_wedged = false;
+
     emit deviceChanged();
     reapplySaved(QStringLiteral("控制器已重新连接"));
 }
 
 void Controller::reapplySaved(const QString &reason)
 {
-    if (!m_rgb.isOpen())
+    if (!m_rgb.isOpen() || m_wedged)
         return;
 
     if (!hasManagedZones()) {
@@ -285,9 +296,34 @@ void Controller::onPrepareForSleep(bool sleeping)
     });
 }
 
+bool Controller::checkWedged()
+{
+    if (!m_wedged && !RgbFusion2::isFirmwareHang(m_rgb.lastErrno()))
+        return false;
+
+    // Restated on every refused write, not just the first: whoever pressed the
+    // button wants to know why nothing happened, and the status line by then
+    // may be showing something else entirely.
+    m_wedged = true;
+    m_flushTimer.stop();
+    setPending(hasManagedZones());
+    setStatus(QStringLiteral(
+                  "控制器固件已停止响应，主板断电前无法恢复。"
+                  "请关机后切断电源（关闭电源开关或拔掉电源线）约 10 秒再开机；"
+                  "重启是不够的，这颗芯片走 +5VSB 供电。"),
+              true);
+    return true;
+}
+
 void Controller::handleIoFailure(const QString &message)
 {
     setStatus(message, true);
+
+    // Distinguished from the two cases below because nothing here can fix it:
+    // the controller has stopped answering and will keep doing so until the
+    // board loses power, so the only useful move is to stop writing and say so.
+    if (checkWedged())
+        return;
 
     // A write can fail for a passing reason; only a node that is no longer
     // there means the handle is dead. Dropping it hands the retry to the
@@ -581,13 +617,13 @@ void Controller::setPending(bool on)
 void Controller::scheduleFlush()
 {
     setPending(true);
-    if (m_autoApply && m_rgb.isOpen() && !m_detecting)
+    if (m_autoApply && m_rgb.isOpen() && !m_detecting && !m_wedged)
         m_flushTimer.start();
 }
 
 void Controller::flush()
 {
-    if (!m_rgb.isOpen() || m_detecting)
+    if (!m_rgb.isOpen() || m_detecting || m_wedged)
         return;
 
     QString error;
@@ -615,6 +651,8 @@ void Controller::apply()
         setStatus(QStringLiteral("设备未连接。"), true);
         return;
     }
+    if (checkWedged())
+        return;
 
     m_flushTimer.stop();
 
@@ -648,6 +686,8 @@ void Controller::allOff()
         setStatus(QStringLiteral("设备未连接。"), true);
         return;
     }
+    if (checkWedged())
+        return;
 
     m_flushTimer.stop();
 

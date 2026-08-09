@@ -2,6 +2,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QThread>
 
 #include <linux/hidraw.h>
 #include <sys/ioctl.h>
@@ -129,6 +130,19 @@ void HidRawDevice::close()
     m_path.clear();
 }
 
+void HidRawDevice::pace()
+{
+    if (m_minIntervalMs <= 0)
+        return;
+
+    if (m_sinceLastIo.isValid()) {
+        const qint64 waited = m_sinceLastIo.elapsed();
+        if (waited < m_minIntervalMs)
+            QThread::msleep(static_cast<unsigned long>(m_minIntervalMs - waited));
+    }
+    m_sinceLastIo.restart();
+}
+
 bool HidRawDevice::sendFeatureReport(const QByteArray &data, QString *error)
 {
     if (m_fd < 0) {
@@ -137,11 +151,15 @@ bool HidRawDevice::sendFeatureReport(const QByteArray &data, QString *error)
         return false;
     }
 
+    pace();
+
     if (::ioctl(m_fd, HIDIOCSFEATURE(data.size()), data.constData()) < 0) {
+        m_lastErrno = errno;
         if (error)
             *error = QStringLiteral("HIDIOCSFEATURE 失败: %1").arg(errnoText());
         return false;
     }
+    m_lastErrno = 0;
     return true;
 }
 
@@ -156,12 +174,16 @@ bool HidRawDevice::getFeatureReport(uint8_t reportId, int length, QByteArray *ou
     QByteArray buf(length, char(0));
     buf[0] = static_cast<char>(reportId);
 
+    pace();
+
     const int n = ::ioctl(m_fd, HIDIOCGFEATURE(length), buf.data());
     if (n < 0) {
+        m_lastErrno = errno;
         if (error)
             *error = QStringLiteral("HIDIOCGFEATURE 失败: %1").arg(errnoText());
         return false;
     }
+    m_lastErrno = 0;
 
     buf.resize(n);
     *out = buf;

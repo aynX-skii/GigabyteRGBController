@@ -64,6 +64,15 @@ public:
 
     static constexpr int kZoneCount = 8;            // led1 .. led8
 
+    // Minimum gap between two feature reports. The controller is an MCU on the
+    // board's +5VSB rail with no queue worth the name: a full apply used to go
+    // out as ~18 reports about a millisecond apart, which it survives from a
+    // cold boot but not when it comes up carrying state from GIGABYTE CONTROL
+    // CENTER. There it stops answering partway through and every later transfer
+    // fails EPROTO until the board actually loses power. OpenRGB paces the same
+    // chip at tens of milliseconds; 20 keeps a full apply well under a second.
+    static constexpr int kMinIoIntervalMs = 20;
+
     enum class Mode {
         Off,
         Static,
@@ -105,6 +114,14 @@ public:
 
     QString devicePath() const { return m_dev.path(); }
     const DeviceInfo &deviceInfo() const { return m_info; }
+
+    // errno behind the last failed transfer. See HidRawDevice::lastErrno().
+    int lastErrno() const { return m_dev.lastErrno(); }
+
+    // True once the controller has stopped answering altogether - see
+    // kMinIoIntervalMs for what that state is. Nothing the host can send clears
+    // it; only cutting power to the board does.
+    static bool isFirmwareHang(int err);
 
     // Sends 0xCC 0x60 and reads back the info report.
     bool initialize(QString *error = nullptr);

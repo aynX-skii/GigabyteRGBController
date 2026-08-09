@@ -2,6 +2,8 @@
 
 #include <QThread>
 
+#include <cerrno>
+
 namespace {
 
 // Speed tables. Each entry is three little-endian uint16 durations in
@@ -280,6 +282,16 @@ QString RgbFusion2::hexDump(const QByteArray &data)
     return out;
 }
 
+bool RgbFusion2::isFirmwareHang(int err)
+{
+    // EPROTO is what the xHCI driver reports once the MCU stops driving the bus
+    // correctly, and ETIMEDOUT is the transfer that catches it going under.
+    // ENODEV follows when the kernel gives up on the port entirely - by then it
+    // will not even answer a SET_ADDRESS, so re-enumerating cannot bring it
+    // back and asking the kernel to try only loses the node as well.
+    return err == EPROTO || err == ETIMEDOUT || err == ENODEV;
+}
+
 bool RgbFusion2::openFirstDevice(QString *error)
 {
     const QVector<HidRawInfo> nodes = HidRawDevice::enumerate();
@@ -304,8 +316,10 @@ bool RgbFusion2::openFirstDevice(QString *error)
         if (!info.reportDescriptor.contains(kLightingUsage))
             continue;
 
-        if (m_dev.open(info.path, error))
+        if (m_dev.open(info.path, error)) {
+            m_dev.setMinInterval(kMinIoIntervalMs);
             return true;
+        }
         return false; // found it but could not open - surface the errno
     }
 
