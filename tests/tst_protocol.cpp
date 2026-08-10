@@ -67,6 +67,23 @@ private slots:
         QCOMPARE(quint8(lamp.at(2)), quint8(0x01));
     }
 
+    void applyMaskIsNarrowOnTheOlderParts()
+    {
+        // GIGABYTE's MCU_8297.Apply(): byte 2 carries the mask, and byte 3 is
+        // only written on IT5711 and later, where it holds the high bits. On a
+        // 5702 a stray byte 3 would be a zone selection nobody asked for.
+        const QByteArray narrow =
+            RgbFusion2::buildApplyReport(RgbFusion2::kApplyAllZones, false);
+        QCOMPARE(quint8(narrow.at(1)), quint8(0x28));
+        QCOMPARE(quint8(narrow.at(2)), quint8(0xFF));
+        QCOMPARE(quint8(narrow.at(3)), quint8(0x00));
+
+        const QByteArray wide =
+            RgbFusion2::buildApplyReport(RgbFusion2::kApplyAllZones, true);
+        QCOMPARE(quint8(wide.at(2)), quint8(0xFF));
+        QCOMPARE(quint8(wide.at(3)), quint8(0x07));
+    }
+
     void zoneResetIsTheZoneCommandWithAnEmptyPayload()
     {
         const QByteArray reset = RgbFusion2::buildZoneResetReport(2);

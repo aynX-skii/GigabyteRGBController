@@ -50,7 +50,7 @@ public:
     static constexpr uint8_t kCmdInit       = 0x60; // request device info
     static constexpr uint8_t kCmdApply      = 0x28; // commit staged zone settings
     static constexpr uint8_t kZoneCmdBase   = 0x20; // zone i -> command 0x20 + i
-    static constexpr uint8_t kApplyAllMask  = 0xFF;
+    static constexpr uint16_t kApplyAllZones = 0x07FF;
 
     // Global modes the board can come out of a cold boot already in, both of
     // which leave the controller painting zones by itself. Names and values
@@ -58,9 +58,20 @@ public:
     static constexpr uint8_t kCmdBeat       = 0x31; // hardware audio-beat mode
     static constexpr uint8_t kCmdLampArray  = 0x48; // HID LampArray (MSDL) mode
 
-    // SuppCmdFlag bit that says 0x48 is understood. Sending it blind to a
-    // controller that does not support it is what OpenRGB guards against here.
-    static constexpr uint8_t kSuppLampArray = 0x02;
+    // "Keep LED setting": with it on, the controller holds the effects it has
+    // stored rather than taking new ones. GIGABYTE's client switches it off
+    // (SaveLedParameter(0)) and leaves it off, which is what we do too - a
+    // controller that came back from Windows holding someone else's effects is
+    // the one case where it would bite.
+    static constexpr uint8_t kCmdKeepSetting = 0x47;
+
+    // SuppCmdFlag bits, named as GIGABYTE's own code reads them:
+    //   bit 0 -> 0x47 understood (bSuppKeepLedSetting)
+    //   bit 1 -> 0x48 understood (bSuppMSDLSwitch)
+    // Sending either blind to a controller that does not advertise it is what
+    // the client guards against, and so do we.
+    static constexpr uint8_t kSuppKeepSetting = 0x01;
+    static constexpr uint8_t kSuppLampArray   = 0x02;
 
     static constexpr int kZoneCount = 8;            // led1 .. led8
 
@@ -114,6 +125,12 @@ public:
 
     QString devicePath() const { return m_dev.path(); }
     const DeviceInfo &deviceInfo() const { return m_info; }
+    uint16_t productId() const { return m_productId; }
+
+    // IT5711 widened the apply mask to 16 bits and added three more registers
+    // to clear. GIGABYTE's client gates both on `LedCtrlBy >= IT5711`, which
+    // its own GetMcuInfo() reaches only for product ID 0x5711.
+    bool hasWideZoneMask() const { return m_productId == 0x5711; }
 
     // errno behind the last failed transfer. See HidRawDevice::lastErrno().
     int lastErrno() const { return m_dev.lastErrno(); }
@@ -185,7 +202,11 @@ public:
 
     static QByteArray buildZoneReport(int zone, Mode mode, const QColor &color,
                                       int brightness, Speed speed, int minBrightness);
-    static QByteArray buildApplyReport();
+    // The apply mask is 16 bits wide on IT5711 and later, where the extra byte
+    // covers the addressable-strip zones; on the older parts byte 3 stays zero.
+    // GIGABYTE's Apply() writes 0x07 into it for "everything".
+    static QByteArray buildApplyReport(uint16_t zoneMask = kApplyAllZones,
+                                       bool wideMask = false);
     static QByteArray buildInitReport();
     static QByteArray buildCommandReport(uint8_t command, uint8_t arg0 = 0,
                                          uint8_t arg1 = 0);
@@ -220,5 +241,6 @@ private:
     bool sendReport(const QByteArray &buf, const QString &label, QString *error);
 
     HidRawDevice m_dev;
+    uint16_t     m_productId = 0;
     DeviceInfo   m_info;
 };

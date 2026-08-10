@@ -121,10 +121,12 @@ QByteArray RgbFusion2::buildInitReport()
     return buildCommandReport(kCmdInit);
 }
 
-QByteArray RgbFusion2::buildApplyReport()
+QByteArray RgbFusion2::buildApplyReport(uint16_t zoneMask, bool wideMask)
 {
     QByteArray buf = buildCommandReport(kCmdApply);
-    buf[2] = static_cast<char>(kApplyAllMask);
+    buf[2] = static_cast<char>(zoneMask & 0xFF);
+    if (wideMask)
+        buf[3] = static_cast<char>((zoneMask >> 8) & 0xFF);
     return buf;
 }
 
@@ -318,6 +320,7 @@ bool RgbFusion2::openFirstDevice(QString *error)
 
         if (m_dev.open(info.path, error)) {
             m_dev.setMinInterval(kMinIoIntervalMs);
+            m_productId = info.productId;
             return true;
         }
         return false; // found it but could not open - surface the errno
@@ -422,7 +425,11 @@ bool RgbFusion2::scanStripHeader(int header, StripInfo *out, bool rescan, QStrin
 
 bool RgbFusion2::apply(QString *error)
 {
-    return sendReport(buildApplyReport(), QStringLiteral("APPLY (0x28 0xFF)"), error);
+    const bool wide = hasWideZoneMask();
+    return sendReport(buildApplyReport(kApplyAllZones, wide),
+                      QStringLiteral("APPLY (0x28 0x%1)")
+                          .arg(wide ? QStringLiteral("FF 07") : QStringLiteral("FF")),
+                      error);
 }
 
 bool RgbFusion2::takeOverZones(const QVector<int> &zones, QString *error)
@@ -449,6 +456,17 @@ bool RgbFusion2::takeOverZones(const QVector<int> &zones, QString *error)
             return false;
     }
 
+    // "Keep LED setting" makes the controller hold the effects it already has
+    // instead of accepting new ones. GIGABYTE's client switches it off around
+    // every write (SaveLedParameter(0)) and never switches it back on; a board
+    // that came back from Windows still holding someone else's effects is
+    // exactly the case it guards against, so do the same.
+    if (m_info.suppCmdFlag & kSuppKeepSetting) {
+        if (!sendReport(buildCommandReport(kCmdKeepSetting, 0),
+                        QStringLiteral("KEEP-SETTING off (0x47)"), error))
+            return false;
+    }
+
     for (int zone : zones) {
         if (zone < 0 || zone >= kZoneCount)
             continue;
@@ -460,11 +478,23 @@ bool RgbFusion2::takeOverZones(const QVector<int> &zones, QString *error)
             return false;
     }
 
+    // IT5711 carries three more zone registers for the addressable headers, and
+    // ClearIT8297Parameter() zeroes them alongside the eight.
+    if (hasWideZoneMask()) {
+        for (uint8_t cmd = 0x90; cmd <= 0x92; ++cmd) {
+            if (!sendReport(buildCommandReport(cmd),
+                            QStringLiteral("RESET 扩展寄存器 (0x%1)")
+                                .arg(cmd, 2, 16, QLatin1Char('0')),
+                            error))
+                return false;
+        }
+    }
+
     if (!apply(error))
         return false;
 
     // The controller needs a moment to act on a mode change before it will take
-    // effects again; OpenRGB waits the same 50 ms after its own mode commands.
-    QThread::msleep(50);
+    // effects again. GIGABYTE's ClearIT8297Parameter() waits 100 ms here.
+    QThread::msleep(100);
     return true;
 }
