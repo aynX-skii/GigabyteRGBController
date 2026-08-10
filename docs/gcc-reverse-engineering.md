@@ -116,6 +116,36 @@ BIOS Setup 里"睡眠/关机时 LED 亮不亮"那类选项），而 MSDL 锁死�
 同理，`IT8295_Block_RW` / `I2C_Block_RW` 是给 **SMBus 挂载的 IT8295** 用的；
 B760M AORUS ELITE 上的 IT5701 走 USB，不在那条总线上。
 
+## GCC 怎么在 Windows 上"恢复"灯光
+
+用户观察到 Windows→Linux→Windows 之后 GCC 能正常控灯，一度像是"存在某条我们没找到
+的设备命令"。不是。`RgbMotherboard.dll` 里 `SetFwMSDLSwitchState` 只被 UI 调度器
+（`Apply()` 的 case 11）调用，常规灯效流程从不碰 `0x48`；`GetMcuInfo()` 读回来的
+`iMsdlSw` 只有 getter，**不参与任何判断**。
+
+真正的动作在 `Dynamic_Lighting_Fun_Lib.dll`，而且是操作系统层面的：
+
+```csharp
+// 写 HKCU\Software\Microsoft\Lighting\Devices\<USB_ID>\AmbientLightingEnabled
+registryKey2.SetValue(Key_name, Status_value, RegistryValueKind.DWord);
+```
+
+GCC 把某设备的 `AmbientLightingEnabled` 置 0，Windows 灯光服务随之放开 LampArray，
+设备回到自主模式。Linux 上没有这个服务，也就没有对应的"放开"动作 —— 这解释了为什么
+遍历设备命令找不到出路。
+
+### 由此引出的待验证假设
+
+把 `AutonomousMode=1` 发下去时，板子**回到了 GCC 的效果**，说明 LampArray 侧确实已经
+释放、设备已回自主模式。那么挡住 Fusion 写入的就是别的东西，最可能是 `0x47`
+KeepLedSetting 被留在了开启状态 —— 症状（全 ACK、保持既有效果、写入无效）完全吻合。
+
+之前唯一一次发 `0x47` 的顺序是：stage → apply → `0x47 0` → `AutonomousMode=1`，
+**暂存发生在 KeepLedSetting 还开着的时候**，之后再没重新暂存过。"先关 `0x47`，再
+stage，再 apply"这个顺序从未测过，而它正是现在 `takeOverZones()` 的顺序。
+
+下次从 Windows 回来时用当前版本跑一次 `--restore` 即可证伪或证实。
+
 ## 尚未解决
 
 从 Windows 热重启后控制器停在 MSDL 模式：Fusion 报文全部被 ACK 但不执行，只有标准

@@ -12,8 +12,10 @@
 # 048d:8297  ITE 8297  (X570 AORUS family)
 # 048d:5711  ITE 5711
 # 048d:7900  ITE 8297FN
+# 048d:8950  ITE 82950  (GIGABYTE's client probes this one too)
 
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="5702", TAG+="uaccess", MODE="0660"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="8297", TAG+="uaccess", MODE="0660"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="5711", TAG+="uaccess", MODE="0660"
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="7900", TAG+="uaccess", MODE="0660"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="048d", ATTRS{idProduct}=="8950", TAG+="uaccess", MODE="0660"

@@ -67,6 +67,29 @@ private slots:
         QCOMPARE(quint8(lamp.at(2)), quint8(0x01));
     }
 
+    void featureLengthComesFromTheDescriptor()
+    {
+        // The real descriptor off a B760M AORUS ELITE. Two vendor collections:
+        // Usage 0x10 / report 0x5A / 16 bytes, then the lighting one, Usage
+        // 0xCC / report 0xCC / 63 bytes. Picking the first Feature item found
+        // would take the 0x5A collection's 16 and short every transfer.
+        const QByteArray real = QByteArray::fromHex(
+            "0689FF0910A101855A0901150026FF0075089510B100C0"
+            "0689FF09CCA10185CC0901150026FF007508953FB100C0");
+        QCOMPARE(RgbFusion2::parseFeatureReportLength(real), RgbFusion2::kBufferLen);
+
+        // A part declaring a different count must be believed, not rounded to
+        // what this board happens to use.
+        const QByteArray wider = QByteArray::fromHex(
+            "0689FF09CCA10185CC0901150026FF00750895FFB100C0");
+        QCOMPARE(RgbFusion2::parseFeatureReportLength(wider), 256);
+
+        // No lighting collection at all - callers fall back to kBufferLen.
+        const QByteArray other = QByteArray::fromHex(
+            "0689FF0910A101855A0901150026FF0075089510B100C0");
+        QCOMPARE(RgbFusion2::parseFeatureReportLength(other), 0);
+    }
+
     void applyMaskIsNarrowOnTheOlderParts()
     {
         // GIGABYTE's MCU_8297.Apply(): byte 2 carries the mask, and byte 3 is

@@ -18,6 +18,7 @@ ITE Tech. (VID `048d`) RGB 控制器：
 | `8297` | IT8297    | X570 AORUS ELITE 等 |
 | `5711` | IT5711    | 较新的 AORUS 主板 |
 | `7900` | IT8297FN  | |
+| `8950` | IT82950   | GIGABYTE 官方客户端也探测这颗 |
 
 开发与验证平台：**Gigabyte B760M AORUS ELITE**，控制器 `048d:5702`
 （芯片自报 `IT5701-GIGABYTE V3.5.15.0`，`ChipId = 0x57010100`）。

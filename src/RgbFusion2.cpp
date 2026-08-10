@@ -284,6 +284,56 @@ QString RgbFusion2::hexDump(const QByteArray &data)
     return out;
 }
 
+int RgbFusion2::parseFeatureReportLength(const QByteArray &descriptor)
+{
+    // Short-item walk. Each item is a prefix byte - tag<<4 | type<<2 | size -
+    // followed by 0, 1, 2 or 4 data bytes. Enough for these descriptors, which
+    // carry no long items.
+    static const int kDataLen[4] = {0, 1, 2, 4};
+
+    uint32_t usagePage  = 0;
+    uint32_t usage      = 0;
+    uint32_t reportId   = 0;
+    uint32_t reportSize = 0;
+    uint32_t reportCnt  = 0;
+    bool     inLighting = false;
+
+    for (int i = 0; i < descriptor.size();) {
+        const uint8_t prefix = static_cast<uint8_t>(descriptor.at(i++));
+        const int     n      = kDataLen[prefix & 0x03];
+        if (i + n > descriptor.size())
+            break;
+
+        uint32_t value = 0;
+        for (int b = 0; b < n; ++b)
+            value |= static_cast<uint32_t>(static_cast<uint8_t>(descriptor.at(i + b))) << (8 * b);
+        i += n;
+
+        switch (prefix & 0xFC) {
+        case 0x04: usagePage  = value; break;   // Global, Usage Page
+        case 0x08: usage      = value; break;   // Local,  Usage
+        case 0x84: reportId   = value; break;   // Global, Report ID
+        case 0x74: reportSize = value; break;   // Global, Report Size
+        case 0x94: reportCnt  = value; break;   // Global, Report Count
+        case 0xA0:                              // Main,   Collection
+            inLighting = usagePage == 0xFF89 && usage == kReportId;
+            break;
+        case 0xC0:                              // Main,   End Collection
+            inLighting = false;
+            break;
+        case 0xB0:                              // Main,   Feature
+            if (inLighting && reportId == kReportId && reportSize && reportCnt) {
+                // Bits to bytes, plus the report ID the hidraw ioctls prepend.
+                return static_cast<int>(reportSize * reportCnt / 8) + 1;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    return 0;
+}
+
 bool RgbFusion2::isFirmwareHang(int err)
 {
     // EPROTO is what the xHCI driver reports once the MCU stops driving the bus
@@ -321,6 +371,9 @@ bool RgbFusion2::openFirstDevice(QString *error)
         if (m_dev.open(info.path, error)) {
             m_dev.setMinInterval(kMinIoIntervalMs);
             m_productId = info.productId;
+
+            const int len = parseFeatureReportLength(info.reportDescriptor);
+            m_reportLen = len > 0 ? len : kBufferLen;
             return true;
         }
         return false; // found it but could not open - surface the errno
@@ -341,13 +394,21 @@ bool RgbFusion2::openFirstDevice(QString *error)
 void RgbFusion2::close()
 {
     m_dev.close();
-    m_info = DeviceInfo();
+    m_info      = DeviceInfo();
+    m_productId = 0;
+    m_reportLen = kBufferLen;
 }
 
 bool RgbFusion2::sendReport(const QByteArray &buf, const QString &label, QString *error)
 {
-    emit traffic(true, label, buf);
-    return m_dev.sendFeatureReport(buf, error);
+    // The builders all produce kBufferLen; a device that declares something
+    // else gets the length it asked for rather than a short or long transfer.
+    QByteArray out = buf;
+    if (out.size() != m_reportLen)
+        out.resize(m_reportLen);
+
+    emit traffic(true, label, out);
+    return m_dev.sendFeatureReport(out, error);
 }
 
 bool RgbFusion2::initialize(QString *error)
@@ -356,7 +417,7 @@ bool RgbFusion2::initialize(QString *error)
         return false;
 
     QByteArray resp;
-    if (!m_dev.getFeatureReport(kReportId, kBufferLen, &resp, error))
+    if (!m_dev.getFeatureReport(kReportId, m_reportLen, &resp, error))
         return false;
 
     emit traffic(false, QStringLiteral("INFO 应答"), resp);
@@ -411,7 +472,7 @@ bool RgbFusion2::scanStripHeader(int header, StripInfo *out, bool rescan, QStrin
         return false;
 
     QByteArray resp;
-    if (!m_dev.getFeatureReport(kReportId, kBufferLen, &resp, error))
+    if (!m_dev.getFeatureReport(kReportId, m_reportLen, &resp, error))
         return false;
     emit traffic(false, QStringLiteral("灯带头%1 信息").arg(header), resp);
 

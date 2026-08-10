@@ -44,6 +44,13 @@ public:
     static constexpr uint16_t kVendorId = 0x048D;   // ITE Tech. Inc.
 
     static constexpr uint8_t kReportId      = 0xCC;
+
+    // What the B760M AORUS ELITE's descriptor declares, and the size every
+    // builder produces. It is the default rather than the truth: GIGABYTE's
+    // client takes the length from the descriptor per device
+    // (MyReportLength[].FeatureLength) instead of assuming, and so does
+    // reportLength() once a device is open. Other parts in this family are not
+    // promised to use 63.
     static constexpr int     kPayloadLen    = 63;   // Report Count from the descriptor
     static constexpr int     kBufferLen     = kPayloadLen + 1; // + report ID byte
 
@@ -126,6 +133,15 @@ public:
     QString devicePath() const { return m_dev.path(); }
     const DeviceInfo &deviceInfo() const { return m_info; }
     uint16_t productId() const { return m_productId; }
+
+    // Feature-report size this device actually declares, including the report
+    // ID byte. Falls back to kBufferLen when the descriptor cannot be read.
+    int reportLength() const { return m_reportLen; }
+
+    // Digs the 0xFF89/0xCC collection's Report Size x Report Count out of a HID
+    // report descriptor. Returns 0 when there is no such collection. Static so
+    // it can be tested against captured descriptors.
+    static int parseFeatureReportLength(const QByteArray &descriptor);
 
     // IT5711 widened the apply mask to 16 bits and added three more registers
     // to clear. GIGABYTE's client gates both on `LedCtrlBy >= IT5711`, which
@@ -242,5 +258,6 @@ private:
 
     HidRawDevice m_dev;
     uint16_t     m_productId = 0;
+    int          m_reportLen = kBufferLen;
     DeviceInfo   m_info;
 };
