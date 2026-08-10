@@ -9,6 +9,8 @@
 #include "RgbFusion2.h"
 
 #include <QColor>
+
+class LampArray;
 #include <QRect>
 #include <QString>
 #include <QStringList>
@@ -69,6 +71,35 @@ bool load(ZoneSetting zones[RgbFusion2::kZoneCount]);
 // Stages every zone and commits once.
 bool apply(RgbFusion2 &rgb, const ZoneSetting zones[RgbFusion2::kZoneCount],
            QString *error = nullptr);
+
+// ---- LampArray fallback ----------------------------------------------------
+//
+// Booting into Linux from Windows leaves this controller in HID LampArray
+// (MSDL) mode, where it acknowledges every RGB Fusion report and acts on none
+// of them - the lighting simply keeps running whatever GIGABYTE CONTROL CENTER
+// left behind. Nothing the host can send gets it out: 0x48, 0x31, 0x47, a
+// fresh 0x60, per-zone apply masks and the LampArray autonomous-mode flag were
+// all tried and all ignored, and the state survives a normal shutdown because
+// the chip sits on +5VSB. Only cutting mains power clears it.
+//
+// The one channel that still drives the LEDs in that state is LampArray
+// itself, so this is the escape hatch. It is strictly worse than the hardware
+// path - the board exposes a single logical lamp, so all eight zones collapse
+// to one colour, and the effects are gone because host-driven lighting has no
+// on-board animation - which is why it is a switch the user throws rather than
+// something chosen automatically. Automatic would need the app to tell the two
+// states apart, and it cannot: the INFO report, the 0x5A report and the
+// LampArray attributes are byte-identical either way, and a Fusion write
+// always reports success.
+bool lampFallback();
+void setLampFallback(bool on);
+
+// Paints the LampArray from the same zone settings, collapsing them to the one
+// colour the hardware can show. Picks the first managed zone known to have
+// LEDs, so a board whose lit zones are 3/6/7 does not end up showing whatever
+// empty zone 1 happens to hold.
+bool applyViaLamp(LampArray &lamp, const ZoneSetting zones[RgbFusion2::kZoneCount],
+                  QString *error = nullptr);
 
 // ---- profiles --------------------------------------------------------------
 //

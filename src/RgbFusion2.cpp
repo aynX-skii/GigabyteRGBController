@@ -434,6 +434,12 @@ bool RgbFusion2::takeOverZones(const QVector<int> &zones, QString *error)
     // and LampArray mode hands them to the Windows dynamic-lighting engine.
     // Neither is anything this program uses, and either one left on would fight
     // the effects staged below.
+    //
+    // Both were suspected of being what leaves the controller ignoring every
+    // Fusion report after a Windows boot, since they arrived in 9d01535 and
+    // that is roughly when restoring stopped working. tools/ab-global-modes.c
+    // cleared them on a mains-cut cold boot: sending each one and painting
+    // after it, the paint still shows. They stay.
     if (!sendReport(buildCommandReport(kCmdBeat, 0),
                     QStringLiteral("BEAT off (0x31)"), error))
         return false;

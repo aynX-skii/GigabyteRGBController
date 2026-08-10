@@ -469,8 +469,26 @@ int main(int argc, char *argv[])
                 return 0;
             }
 
-            RgbFusion2 rgb;
             QString error;
+
+            // With the fallback on, the vendor interface is the one channel
+            // known not to work, and going through it would print a success
+            // the lighting does not back up. See Config::lampFallback().
+            if (Config::lampFallback()) {
+                LampArray lamp;
+                if (!lamp.openFirstDevice(&error)) {
+                    out << "失败: " << error << "\n";
+                    return 1;
+                }
+                if (!Config::applyViaLamp(lamp, zones, &error)) {
+                    out << "恢复失败: " << error << "\n";
+                    return 1;
+                }
+                out << "已从 " << Config::path() << " 恢复灯效 (LampArray 通道)\n";
+                return 0;
+            }
+
+            RgbFusion2 rgb;
             if (!openWithWait(&rgb, waitSeconds, &error)) {
                 out << "失败: " << error << "\n";
                 return 1;

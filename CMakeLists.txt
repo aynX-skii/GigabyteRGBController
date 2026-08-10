@@ -141,6 +141,7 @@ if(BUILD_TESTING)
             src/Config.cpp
             src/RgbFusion2.cpp
             src/HidRawDevice.cpp
+            src/LampArray.cpp
         )
         target_link_libraries(tst_config PRIVATE Qt6::Test Qt6::Gui)
         target_compile_options(tst_config PRIVATE -Wall -Wextra)

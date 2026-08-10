@@ -1,5 +1,7 @@
 #include "Config.h"
 
+#include "LampArray.h"
+
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
@@ -341,4 +343,65 @@ bool Config::apply(RgbFusion2 &rgb, const ZoneSetting zones[RgbFusion2::kZoneCou
             return false;
     }
     return true;
+}
+
+bool Config::lampFallback()
+{
+    QSettings s(path(), QSettings::IniFormat);
+    return s.value(QStringLiteral("lampFallback"), false).toBool();
+}
+
+void Config::setLampFallback(bool on)
+{
+    QSettings s(path(), QSettings::IniFormat);
+    s.setValue(QStringLiteral("lampFallback"), on);
+    s.sync();
+}
+
+bool Config::applyViaLamp(LampArray &lamp, const ZoneSetting zones[RgbFusion2::kZoneCount],
+                          QString *error)
+{
+    // Prefer a zone that is both managed and known to hold LEDs; fall back to
+    // any managed zone when the detection wizard has never been run.
+    const ZoneSetting *pick = nullptr;
+    for (int i = 0; i < RgbFusion2::kZoneCount && !pick; ++i) {
+        if (zones[i].managed && zones[i].connected)
+            pick = &zones[i];
+    }
+    for (int i = 0; i < RgbFusion2::kZoneCount && !pick; ++i) {
+        if (zones[i].managed)
+            pick = &zones[i];
+    }
+    if (!pick) {
+        if (error)
+            *error = QStringLiteral("配置里没有已保存的区域");
+        return false;
+    }
+
+    // Deliberately does not call queryAttributes() first. Walking the lamps
+    // through reports 2/3 leaves this controller acknowledging range updates
+    // without acting on them - a painted frame goes through before the walk and
+    // nothing does after it, until the board loses power. The walk is only
+    // needed to populate the LampArray page; painting does not need it.
+    //
+    // So address a single lamp unless a walk has already happened for other
+    // reasons. That is what this board has (LampCount = 1), and an idEnd past
+    // the end is accepted and then silently dropped, which looks exactly like
+    // the channel being dead - so erring low is the safe direction.
+    const uint16_t count = lamp.attributes().lampCount;
+    const uint16_t idEnd = count > 0 ? static_cast<uint16_t>(count - 1) : 0;
+
+    // Host updates only reach the LEDs with autonomous mode off.
+    if (!lamp.setAutonomousMode(false, error))
+        return false;
+
+    // Off is the one mode that carries over exactly; the animated ones have no
+    // equivalent here, so they show as their base colour held steady.
+    const bool off = pick->mode == RgbFusion2::Mode::Off || pick->brightness <= 0;
+    const int  ceiling = qMax(1, RgbFusion2::maxBrightness(pick->mode));
+    const int  intensity =
+        off ? 0 : qBound(1, pick->brightness * 255 / ceiling, 255);
+
+    return lamp.setLampRange(0, idEnd, pick->colour,
+                             static_cast<uint8_t>(intensity), error);
 }

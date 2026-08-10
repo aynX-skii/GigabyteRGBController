@@ -171,6 +171,31 @@ ApplicationWindow {
                         onToggled: (v) => Ctl.autoApply = v
                     }
 
+                    Item { implicitWidth: 8 }
+
+                    Text {
+                        id: fallbackLabel
+                        text: "LampArray 驱动"
+                        color: Ctl.lampFallback ? Theme.accent : Theme.textDim
+                        font.pixelSize: Theme.fontSmall
+
+                        HoverHandler { id: fallbackHover }
+                        ToolTipBubble {
+                            below: true
+                            show: fallbackHover.hovered
+                            text: "从 Windows 重启到 Linux 后，控制器会停在 LampArray 模式：" +
+                                  "硬件效果报文全部被确认却不执行，灯光纹丝不动。\n" +
+                                  "打开这个开关改走标准 LampArray 接口，是那种状态下唯一还能点亮的通道。\n" +
+                                  "代价：整块板子只能显示一种颜色，动态效果不可用。\n" +
+                                  "彻底恢复需要关机后切断市电约 10 秒。"
+                        }
+                    }
+
+                    ToggleSwitch {
+                        checked: Ctl.lampFallback
+                        onToggled: (v) => Ctl.lampFallback = v
+                    }
+
                     PillButton {
                         text: "重新扫描"
                         onClicked: Ctl.rescan()
@@ -242,6 +267,33 @@ ApplicationWindow {
                 // ============ page 1: hardware effects ==========================
                 ColumnLayout {
                     spacing: Theme.gap
+
+                    // The fallback changes what half of this page means - zones
+                    // stop being separable and the effect rail stops mattering -
+                    // so it says so here rather than leaving the controls
+                    // looking live.
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: Ctl.lampFallback
+                        implicitHeight: fallbackNote.implicitHeight + 20
+                        radius: Theme.radiusSmall
+                        color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.12)
+                        border.width: 1
+                        border.color: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.45)
+
+                        Text {
+                            id: fallbackNote
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            wrapMode: Text.WordWrap
+                            font.pixelSize: Theme.fontSmall
+                            color: Theme.text
+                            text: "正在走 LampArray 通道 —— 板子只暴露一颗逻辑灯，" +
+                                  "所以八个区会合并成一种颜色（取第一个有灯的已保存区域），" +
+                                  "呼吸／闪烁／循环这些板载效果不可用。" +
+                                  "要回到硬件效果，关机后切断市电约 10 秒再开机，然后关掉这个开关。"
+                        }
+                    }
 
                     // Deliberately not in a Card: the effect panel below is the
                     // one that gives up height when the window is short, and a

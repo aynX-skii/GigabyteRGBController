@@ -78,6 +78,8 @@ class Controller : public QObject
 
     Q_PROPERTY(bool autoApply READ autoApply WRITE setAutoApply
                               NOTIFY autoApplyChanged)
+    Q_PROPERTY(bool lampFallback READ lampFallback WRITE setLampFallback
+                                 NOTIFY lampFallbackChanged)
 
     // True when the edited settings have not been sent to the controller yet.
     // Drives the apply button: nothing pending, nothing to press.
@@ -150,6 +152,12 @@ public:
 
     bool autoApply() const { return m_autoApply; }
     void setAutoApply(bool on);
+
+    // Routes every write through the standard LampArray interface instead of
+    // the vendor one. See Config::lampFallback() for why this exists and why
+    // the user has to choose it rather than the app detecting the need.
+    bool lampFallback() const { return m_lampFallback; }
+    void setLampFallback(bool on);
 
     bool pending() const { return m_pending; }
 
@@ -246,6 +254,7 @@ signals:
     void selectedZoneChanged();
     void settingsChanged();
     void autoApplyChanged();
+    void lampFallbackChanged();
     void pendingChanged();
     void customColoursChanged();
     void profilesChanged();
@@ -277,6 +286,10 @@ private:
     // Reports the hang and shuts down every write path. Returns true when the
     // caller should give up rather than carry on down its loop.
     bool checkWedged();
+
+    // Repaints from the current zone settings over whichever channel is
+    // selected. Returns false with `error` set; callers decide how loud to be.
+    bool pushCurrent(QString *error);
 
     // Pushes the saved effects back out. Both the reconnect path and the
     // resume-from-suspend path need it: either way the controller is in its
@@ -330,6 +343,7 @@ private:
     quint8 m_selection = 0xFF;
     bool m_autoApply    = true;
     bool m_pending      = false;
+    bool m_lampFallback = false;
 
     // Set once the controller firmware has hung. Every later write is refused
     // rather than attempted: it is not coming back without losing power, and

@@ -88,6 +88,7 @@ Controller::Controller(QObject *parent)
             }
         }
     }
+    m_lampFallback  = Config::lampFallback();
     m_customColours = Config::loadCustomColours();
     if (m_customColours.size() != Config::kCustomColourSlots)
         m_customColours.resize(Config::kCustomColourSlots);
@@ -257,8 +258,12 @@ void Controller::watchdogTick()
 
 void Controller::reapplySaved(const QString &reason)
 {
-    if (!m_rgb.isOpen() || m_wedged)
+    if (m_lampFallback) {
+        if (!m_lamp.isOpen())
+            return;
+    } else if (!m_rgb.isOpen() || m_wedged) {
         return;
+    }
 
     if (!hasManagedZones()) {
         setStatus(QStringLiteral("%1：没有已保存的灯效可恢复。").arg(reason));
@@ -266,7 +271,9 @@ void Controller::reapplySaved(const QString &reason)
     }
 
     QString error;
-    if (m_autoApply && Config::apply(m_rgb, m_zones, &error)) {
+    const bool ok = m_lampFallback ? Config::applyViaLamp(m_lamp, m_zones, &error)
+                                   : Config::apply(m_rgb, m_zones, &error);
+    if (m_autoApply && ok) {
         setPending(false);
         setStatus(QStringLiteral("%1，灯效已恢复。").arg(reason));
         return;
@@ -617,28 +624,79 @@ void Controller::setPending(bool on)
 void Controller::scheduleFlush()
 {
     setPending(true);
-    if (m_autoApply && m_rgb.isOpen() && !m_detecting && !m_wedged)
+    const bool live = m_lampFallback ? m_lamp.isOpen() : (m_rgb.isOpen() && !m_wedged);
+    if (m_autoApply && live && !m_detecting)
         m_flushTimer.start();
 }
 
-void Controller::flush()
+bool Controller::pushCurrent(QString *error)
 {
-    if (!m_rgb.isOpen() || m_detecting || m_wedged)
-        return;
+    if (m_lampFallback)
+        return Config::applyViaLamp(m_lamp, m_zones, error);
 
-    QString error;
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
         if (!isSelected(i))
             continue;
         const ZoneSetting &z = m_zones[i];
         if (!m_rgb.setZone(i, z.mode, z.colour, z.brightness, z.speed,
-                           z.minBrightness, &error)) {
-            handleIoFailure(QStringLiteral("区域 %1 设置失败：%2").arg(i + 1).arg(error));
-            return;
+                           z.minBrightness, error)) {
+            if (error)
+                *error = QStringLiteral("区域 %1 设置失败：%2").arg(i + 1).arg(*error);
+            return false;
         }
     }
-    if (!m_rgb.apply(&error)) {
-        handleIoFailure(QStringLiteral("提交失败：%1").arg(error));
+    if (!m_rgb.apply(error)) {
+        if (error)
+            *error = QStringLiteral("提交失败：%1").arg(*error);
+        return false;
+    }
+    return true;
+}
+
+void Controller::setLampFallback(bool on)
+{
+    if (on == m_lampFallback)
+        return;
+    m_lampFallback = on;
+    Config::setLampFallback(on);
+    emit lampFallbackChanged();
+
+    if (on && !m_lamp.isOpen())
+        connectLampArray();
+
+    if (!on) {
+        // Leaving the fallback hands the LEDs back to the board's own effect
+        // engine. That only does anything once the Fusion path is alive again,
+        // but doing it here means one power cycle is all it takes.
+        QString error;
+        if (m_lamp.isOpen())
+            m_lamp.setAutonomousMode(true, &error);
+        setStatus(QStringLiteral("已切回硬件效果通道。"));
+        setPending(hasManagedZones());
+        return;
+    }
+
+    QString error;
+    if (!pushCurrent(&error)) {
+        setStatus(QStringLiteral("已切到 LampArray 通道，但下发失败：%1").arg(error), true);
+        setPending(true);
+        return;
+    }
+    setPending(false);
+    setStatus(QStringLiteral(
+        "已切到 LampArray 通道。八个区会合并成一种颜色，动态效果不可用。"));
+}
+
+void Controller::flush()
+{
+    if (m_detecting || m_wedged)
+        return;
+    if (m_lampFallback ? !m_lamp.isOpen() : !m_rgb.isOpen())
+        return;
+
+    QString error;
+    if (!pushCurrent(&error)) {
+        handleIoFailure(error);
         return;
     }
     scheduleSave();
@@ -647,46 +705,42 @@ void Controller::flush()
 
 void Controller::apply()
 {
-    if (!m_rgb.isOpen()) {
+    if (m_lampFallback ? !m_lamp.isOpen() : !m_rgb.isOpen()) {
         setStatus(QStringLiteral("设备未连接。"), true);
         return;
     }
-    if (checkWedged())
+    if (!m_lampFallback && checkWedged())
         return;
 
     m_flushTimer.stop();
 
     QString error;
+    if (!pushCurrent(&error)) {
+        handleIoFailure(error);
+        return;
+    }
+
     int sent = 0;
     for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
-        if (!isSelected(i))
-            continue;
-        const ZoneSetting &z = m_zones[i];
-        if (!m_rgb.setZone(i, z.mode, z.colour, z.brightness, z.speed,
-                           z.minBrightness, &error)) {
-            handleIoFailure(QStringLiteral("区域 %1 设置失败：%2").arg(i + 1).arg(error));
-            return;
-        }
-        ++sent;
-    }
-    if (!m_rgb.apply(&error)) {
-        handleIoFailure(QStringLiteral("提交失败：%1").arg(error));
-        return;
+        if (isSelected(i))
+            ++sent;
     }
 
     scheduleSave();
     setPending(false);
     emit zonesChanged();
-    setStatus(QStringLiteral("已应用 %1 个区域，配置已保存。").arg(sent));
+    setStatus(m_lampFallback
+                  ? QStringLiteral("已通过 LampArray 应用，配置已保存。")
+                  : QStringLiteral("已应用 %1 个区域，配置已保存。").arg(sent));
 }
 
 void Controller::allOff()
 {
-    if (!m_rgb.isOpen()) {
+    if (m_lampFallback ? !m_lamp.isOpen() : !m_rgb.isOpen()) {
         setStatus(QStringLiteral("设备未连接。"), true);
         return;
     }
-    if (checkWedged())
+    if (!m_lampFallback && checkWedged())
         return;
 
     m_flushTimer.stop();
@@ -697,15 +751,25 @@ void Controller::allOff()
         // setMode leaves the field alone in that case, which is what makes
         // picking an effect again restore the previous look.
         m_zones[i].setMode(RgbFusion2::Mode::Off);
-        if (!m_rgb.setZone(i, RgbFusion2::Mode::Off, QColor(), 0,
-                           RgbFusion2::Speed::Normal, 0, &error)) {
-            handleIoFailure(QStringLiteral("区域 %1 关闭失败：%2").arg(i + 1).arg(error));
+    }
+
+    if (m_lampFallback) {
+        if (!Config::applyViaLamp(m_lamp, m_zones, &error)) {
+            handleIoFailure(QStringLiteral("关闭失败：%1").arg(error));
             return;
         }
-    }
-    if (!m_rgb.apply(&error)) {
-        handleIoFailure(QStringLiteral("提交失败：%1").arg(error));
-        return;
+    } else {
+        for (int i = 0; i < RgbFusion2::kZoneCount; ++i) {
+            if (!m_rgb.setZone(i, RgbFusion2::Mode::Off, QColor(), 0,
+                               RgbFusion2::Speed::Normal, 0, &error)) {
+                handleIoFailure(QStringLiteral("区域 %1 关闭失败：%2").arg(i + 1).arg(error));
+                return;
+            }
+        }
+        if (!m_rgb.apply(&error)) {
+            handleIoFailure(QStringLiteral("提交失败：%1").arg(error));
+            return;
+        }
     }
 
     scheduleSave();
