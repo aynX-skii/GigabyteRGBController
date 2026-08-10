@@ -9,6 +9,11 @@ import QtQuick.Window
 ApplicationWindow {
     id: window
 
+    // Which tab is showing. Only screenshot mode sets it - the tab strip drives
+    // it otherwise - but it has to live on the root object to be reachable from
+    // outside QML.
+    property alias currentPage: pages.currentIndex
+
     width: 1100
     // Tall enough that the effect panel shows its whole colour column - wheel,
     // fields, both swatch rows and the hint under them - without scrolling.

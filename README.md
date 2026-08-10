@@ -8,6 +8,24 @@ Gigabyte 主板灯光控制，Linux / Qt6 (Qt Quick) 实现。
 **依赖只有 Qt6 和 CMake。** 不需要 hidapi、libusb 或任何内核模块——直接通过
 `ioctl()` 与 `/dev/hidrawN` 通信。
 
+## 界面预览
+
+**硬件效果** —— 分区多选、六种板载效果、色轮与自定义色板、方案管理。
+
+![硬件效果页](docs/images/effects.png)
+
+**标准接口 (LampArray)** —— Windows 11「动态照明」用的同一套标准协议，可枚举灯珠
+坐标与用途、逐灯上色。
+
+![LampArray 页](docs/images/lamparray.png)
+
+**协议日志** —— 每一条 HID Feature 报文的十六进制转储，可过滤、复制、导出。图中是
+一次连接的完整时序：`INIT (0x60)` → `INFO 应答` → `KEEP-SETTING off (0x47)`。
+
+![协议日志页](docs/images/protocol-log.png)
+
+> 三张图都由 `--screenshot <文件> <页>` 渲染，改了界面重跑一遍即可，不需要手工截图。
+
 ## 支持的硬件
 
 ITE Tech. (VID `048d`) RGB 控制器：
@@ -216,8 +234,12 @@ Qt Quick 实现，深色 + 橙色强调，分三页：**硬件效果**、**标�
 不需要显示服务器（会自动切到 Qt Quick 的软件渲染后端）：
 
 ```bash
-QT_QPA_PLATFORM=offscreen ./build/GigabyteRGBController --screenshot ui.png
+QT_QPA_PLATFORM=offscreen ./build/GigabyteRGBController --screenshot ui.png     # 硬件效果页
+QT_QPA_PLATFORM=offscreen ./build/GigabyteRGBController --screenshot ui.png 2   # 协议日志页
 ```
+
+第二个参数是标签页序号（`0` 硬件效果 / `1` LampArray / `2` 协议日志），省略即 `0`。
+上面「界面预览」那三张图就是这么生成的。
 
 ### 命令行
 
@@ -258,8 +280,14 @@ GigabyteRGBController --restore
 往上面叠一层效果不一定顶得掉它（在 B760M AORUS ELITE 上的表现是：芯片组那颗灯
 一直循环着开机彩虹，其它区域都正常）。所以 `--restore` 会先**夺回控制权**——关掉
 硬件节拍模式（`0x31`）和 LampArray 动态照明模式（`0x48`，仅在 `SuppCmdFlag`
-置了 `0x02` 时发），把要写的那几个区域的寄存器清零并提交，然后才写真正的效果；
-没被 `managed` 标记的区域不参与清零，免得把用户没交给我们的区域弄黑。
+置了 `0x02` 时发），把要写的那几个区域的寄存器清零并提交（GCC 在这里等 100 ms），
+然后才写真正的效果；没被 `managed` 标记的区域不参与清零，免得把用户没交给我们的
+区域弄黑。
+
+比这更早一步的是 `0x47` **KeepLedSetting**：它开着的时候控制器会抱着已存的效果不
+放，对新写入回 ACK 然后丢弃。这个开关由 `SuppCmdFlag` bit0 门控，程序在**连接时**
+（`RgbFusion2::initialize()`）就发 `CC 47 00` 关掉它，而不是只在恢复时关——否则从
+Windows 回来后登录恢复能成功，界面上手动改颜色却依然没反应。
 
 效果本身会**连写两遍**。控制器忙的时候偶尔会悄悄丢掉一条 feature report，而协议
 没有读回命令、无从确认，开机那一刻正是它最忙的时候；恢复一次开机只跑一遍，
@@ -374,6 +402,12 @@ C0         End Collection
 
 即 Feature report、Report ID `0xCC`、63 字节数据（含 report ID 共 **64 字节**）。
 
+这个长度**不写死**。GCC 是按设备从描述符取的（`MyReportLength[].FeatureLength`），
+本项目同样如此：`RgbFusion2::parseFeatureReportLength()` 解析
+`0xFF89`/`0xCC` 集合的 `Report Size × Report Count`，解析不出来才退回 64。
+解析必须是**集合感知**的——同一个 hidraw 节点上还挂着 `Usage 0x10` / 报文 `0x5A`
+/ 16 字节那个集合，取描述符里第一个 Feature item 会把每次传输截短到 16 字节。
+
 GCC 内部用同一组四元组识别设备。`RgbMotherboard.dll` 中：
 
 ```csharp
@@ -398,7 +432,7 @@ DevsCount = connect_to_mcu(1165, 22274, 65417, 204);
 | 4–7   | u32     | `FW_Ver` |
 | 8–9   | u16     | `Strip_Ctrl_Length0` |
 | 10    | u8      | `Strip_Ctrl_Length1` |
-| 11    | u8      | `SuppCmdFlag` — 支持的命令位掩码 |
+| 11    | u8      | `SuppCmdFlag` — 支持的命令位掩码（bit0 → `0x47`，bit1 → `0x48`） |
 | 12–39 | char[28]| `ProductString`（NUL 结尾） |
 | 40–55 | u32 ×4  | `CalStrip3` / `CalStrip0` / `CalStrip1` / `CalStrip2` |
 | 56–59 | u32     | `ChipId` |
@@ -607,9 +641,18 @@ C:\AmbientLED\LedIoControl1\LedIoControl\obj\Release\LedIoControl.pdb
 D:\0_WORK\Dynamic_Lighting_Fun_Lib\obj\Release\Dynamic_Lighting_Fun_Lib.pdb
 ```
 
+完整的逆向记录在 **[docs/gcc-reverse-engineering.md](docs/gcc-reverse-engineering.md)**：
+命令表、`DataFormat_8297` 字段偏移、`Apply` 掩码宽度规则、`GHidApi.dll` 的传输层
+映射，以及 GCC 在 Windows 上"恢复灯光"其实是写注册表让系统灯光服务放开设备。
+
 另注：`LedIoControl.dll` 走的是完全不同的通道——ITE **IT86xx Super-I/O 寄存器**
-（`LED1PD1R`、`LED1FE1R`、`LED_BLINKING_CONTROL_REGISTER`）与 BIOS
-（`dllexp_SetLedModeToBios`），用于不带 USB RGB 控制器的老主板，本项目未实现。
+（`LED1PD1R`、`LED1FE1R`、`LED_BLINKING_CONTROL_REGISTER`），用于不带 USB RGB
+控制器的老主板，本项目未实现。
+
+`SMBCtrl.dll` 里的 `dllexp_SetLedModeToBios` / `dllexp_SaveToBios` 是第三条通道，
+**本项目刻意不实现**：它把值暂存进内存里的 BIOS Setup 结构，再触发 **SMI `0xB265`**
+由固件落盘，前提是加载 ring-0 驱动 `gdrv3`。参数约定未公开且随 BIOS 版本变化，传错
+会损坏 NVRAM；而且它管的是电源状态下的灯光行为，不是运行时的灯效控制。
 
 ## 致谢与许可
 

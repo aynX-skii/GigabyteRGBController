@@ -332,7 +332,8 @@ int runSet(const QStringList &args)
 
 // Brings up the Qt Quick UI. With `screenshotPath` set it renders one frame,
 // writes it out and exits instead of entering the event loop.
-int runGui(int argc, char *argv[], const QString &screenshotPath = QString())
+int runGui(int argc, char *argv[], const QString &screenshotPath = QString(),
+           int screenshotPage = 0)
 {
     // The software renderer keeps `-platform offscreen` working on machines
     // with no GPU context available, which is the whole point of screenshot
@@ -403,6 +404,11 @@ int runGui(int argc, char *argv[], const QString &screenshotPath = QString())
 
     // Give the scene graph a moment to lay out and paint before grabbing;
     // grabWindow() on a window that has not settled yields a blank frame.
+    // Tab strip lives in QML; screenshot mode reaches it through the root
+    // object so the README's images can be regenerated rather than hand-taken.
+    if (screenshotPage > 0)
+        window->setProperty("currentPage", screenshotPage);
+
     int result = 0;
     QTimer::singleShot(600, &app, [&]() {
         const bool ok = window->grabWindow().save(screenshotPath);
@@ -518,8 +524,10 @@ int main(int argc, char *argv[])
         // Dev aid: render the window straight to a PNG. Combined with
         // `-platform offscreen` this verifies layout without a display server
         // and produces the screenshots used in the README.
-        if (args.first() == QLatin1String("--screenshot") && args.size() >= 2)
-            return runGui(argc, argv, args.at(1));
+        if (args.first() == QLatin1String("--screenshot") && args.size() >= 2) {
+            const int page = args.size() >= 3 ? args.at(2).toInt() : 0;
+            return runGui(argc, argv, args.at(1), page);
+        }
         if (args.first() == QLatin1String("--version") || args.first() == QLatin1String("-v")) {
             QTextStream(stdout)
                 << "GigabyteRGBController " << GRC_VERSION
@@ -535,7 +543,7 @@ int main(int argc, char *argv[])
                 << "  --restore                 恢复上次保存的灯效\n"
                 << "  --profile <名字>          无界面套用某个方案\n"
                 << "  --list-profiles           列出已保存的方案（* 为当前）\n"
-                << "  --screenshot <文件>       渲染一帧界面到 PNG 后退出\n"
+                << "  --screenshot <文件> [页]  渲染一帧界面到 PNG 后退出（页 0/1/2）\n"
                 << "  --version                 显示版本号\n"
                 << "\n全局选项:\n"
                 << "  --config <文件>      指定配置文件（默认 "
