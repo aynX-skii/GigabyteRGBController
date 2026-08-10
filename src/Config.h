@@ -74,23 +74,22 @@ bool apply(RgbFusion2 &rgb, const ZoneSetting zones[RgbFusion2::kZoneCount],
 
 // ---- LampArray fallback ----------------------------------------------------
 //
-// Booting into Linux from Windows leaves this controller in HID LampArray
-// (MSDL) mode, where it acknowledges every RGB Fusion report and acts on none
-// of them - the lighting simply keeps running whatever GIGABYTE CONTROL CENTER
-// left behind. Nothing the host can send gets it out: 0x48, 0x31, 0x47, a
-// fresh 0x60, per-zone apply masks and the LampArray autonomous-mode flag were
-// all tried and all ignored, and the state survives a normal shutdown because
-// the chip sits on +5VSB. Only cutting mains power clears it.
+// A last resort for a controller that acknowledges every RGB Fusion report
+// and lights nothing, leaving whatever it was already showing.
 //
-// The one channel that still drives the LEDs in that state is LampArray
-// itself, so this is the escape hatch. It is strictly worse than the hardware
-// path - the board exposes a single logical lamp, so all eight zones collapse
-// to one colour, and the effects are gone because host-driven lighting has no
-// on-board animation - which is why it is a switch the user throws rather than
-// something chosen automatically. Automatic would need the app to tell the two
-// states apart, and it cannot: the INFO report, the 0x5A report and the
-// LampArray attributes are byte-identical either way, and a Fusion write
-// always reports success.
+// The known cause of that is 0x47 keep-setting, which RgbFusion2::initialize()
+// now switches off on connect, so this should not come up. It is kept for the
+// case it does: LampArray is a different interface on a different hidraw node,
+// so it stays reachable when the vendor one is not, whatever the reason.
+//
+// Strictly worse than the hardware path - this board exposes a single logical
+// lamp, so all eight zones collapse to one colour, and the on-board animations
+// are gone because host-driven lighting has none. Hence a switch the user
+// throws rather than something chosen automatically: automatic would need the
+// app to notice the vendor path is inert, and it cannot. A Fusion write always
+// reports success, no zone can be read back, and the INFO report, the 0x5A
+// report and the LampArray attributes are byte-identical whether the lighting
+// is obeying or not.
 bool lampFallback();
 void setLampFallback(bool on);
 

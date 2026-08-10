@@ -1,23 +1,22 @@
 // ab-global-modes - isolates which of the two global-mode commands added in
 // 9d01535 kills the RGB Fusion path.
 //
-// Background. Restoring stopped having any visible effect: the controller
-// acknowledges every Fusion report and drives nothing, and only the standard
-// LampArray interface still reaches the LEDs. The state survives reboots and
-// normal shutdowns because the chip runs off +5VSB. It was assumed Windows put
-// the board there, but 9d01535 is also when this program started sending two
-// global-mode commands it never sent before - 0x31 (audio beat) and 0x48
-// (LampArray/MSDL) - and the report is that restoring worked before that.
+// OUTCOME: neither. On a mains-cut cold boot all three paints show, so 0x31
+// and 0x48 are both innocent and 9d01535 was not a regression. What was
+// actually swallowing every write after a Windows boot is 0x47 keep-setting,
+// which initialize() now switches off on connect.
 //
-// So: prove it. Paint through the Fusion path, send one command, paint again.
-// The first paint that does not show is the command that did it.
+// Kept because the shape of the test is the reusable part: paint through the
+// Fusion path, send one suspect command, paint again, and the first paint that
+// does not show names the command that did it. Point it at a new suspect by
+// editing the stages.
 //
 //   cc -O1 -o ab-global-modes tools/ab-global-modes.c
 //   ./ab-global-modes
 //
-// Run this as the FIRST thing after a mains-cut cold boot, with the GUI closed
-// and the restore unit masked - anything that calls Config::apply() first will
-// have sent both commands already and the test tells you nothing.
+// Run it as the FIRST thing after a boot, with the GUI closed and the restore
+// unit masked - anything that calls Config::apply() first has already sent the
+// commands under test, and the result will say nothing.
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/hidraw.h>
