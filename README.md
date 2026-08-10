@@ -25,6 +25,13 @@ ITE Tech. (VID `048d`) RGB 控制器：
 
 已在该平台真机验证：设备识别、信息报文解析、静态/呼吸效果、分区控制、区域映射。
 
+### 双系统注意事项
+
+从 Windows 重启回 Linux 后，控制器会带着 GIGABYTE CONTROL CENTER 留下的状态：
+`0x47` KeepLedSetting 开着，于是它对每一条灯效报文回 ACK 却不执行，灯光纹丝不动。
+本程序在连接时就把它关掉，所以这种情况已经不需要额外操作 —— 详见
+[docs/gcc-reverse-engineering.md](docs/gcc-reverse-engineering.md)。
+
 ## 两套控制通道
 
 同一颗 IT5702 暴露**两个独立的 hidraw 节点**，本项目都支持：

@@ -423,6 +423,22 @@ bool RgbFusion2::initialize(QString *error)
     emit traffic(false, QStringLiteral("INFO 应答"), resp);
 
     m_info = parseInfoReport(resp);
+
+    // "Keep LED setting" makes the controller hold the effects it already has
+    // and quietly drop new ones - it acknowledges every zone write and lights
+    // nothing. Booting into Linux from Windows is how it gets left on, and it
+    // survives reboots and normal shutdowns because the chip runs off +5VSB,
+    // which is why that state used to look like it needed a mains cut.
+    //
+    // Switched off here rather than in takeOverZones() so it covers every path
+    // and not just a restore: with it left on, dragging the colour wheel would
+    // still do nothing until something happened to run a full reapply.
+    // GIGABYTE's client keeps it off the same way and never turns it back on.
+    if (m_info.suppCmdFlag & kSuppKeepSetting) {
+        if (!sendReport(buildCommandReport(kCmdKeepSetting, 0),
+                        QStringLiteral("KEEP-SETTING off (0x47)"), error))
+            return false;
+    }
     return true;
 }
 
@@ -514,17 +530,6 @@ bool RgbFusion2::takeOverZones(const QVector<int> &zones, QString *error)
     if (m_info.suppCmdFlag & kSuppLampArray) {
         if (!sendReport(buildCommandReport(kCmdLampArray, 0),
                         QStringLiteral("LAMPARRAY off (0x48)"), error))
-            return false;
-    }
-
-    // "Keep LED setting" makes the controller hold the effects it already has
-    // instead of accepting new ones. GIGABYTE's client switches it off around
-    // every write (SaveLedParameter(0)) and never switches it back on; a board
-    // that came back from Windows still holding someone else's effects is
-    // exactly the case it guards against, so do the same.
-    if (m_info.suppCmdFlag & kSuppKeepSetting) {
-        if (!sendReport(buildCommandReport(kCmdKeepSetting, 0),
-                        QStringLiteral("KEEP-SETTING off (0x47)"), error))
             return false;
     }
 

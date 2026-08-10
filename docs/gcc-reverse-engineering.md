@@ -134,29 +134,35 @@ GCC 把某设备的 `AmbientLightingEnabled` 置 0，Windows 灯光服务随之�
 设备回到自主模式。Linux 上没有这个服务，也就没有对应的"放开"动作 —— 这解释了为什么
 遍历设备命令找不到出路。
 
-### 由此引出的待验证假设
+### 这条线索解开了整个问题
 
-把 `AutonomousMode=1` 发下去时，板子**回到了 GCC 的效果**，说明 LampArray 侧确实已经
-释放、设备已回自主模式。那么挡住 Fusion 写入的就是别的东西，最可能是 `0x47`
-KeepLedSetting 被留在了开启状态 —— 症状（全 ACK、保持既有效果、写入无效）完全吻合。
+把 `AutonomousMode=1` 发下去时板子**回到了 GCC 的效果** —— 一度被读成"交还失败"，
+其实恰恰说明 LampArray 侧已经正常释放、设备已回自主模式。既然自主模式回来了，挡住
+Fusion 写入的就是别的东西：**`0x47` KeepLedSetting 被 Windows 留在了开启状态**。
 
-之前唯一一次发 `0x47` 的顺序是：stage → apply → `0x47 0` → `AutonomousMode=1`，
-**暂存发生在 KeepLedSetting 还开着的时候**，之后再没重新暂存过。"先关 `0x47`，再
-stage，再 apply"这个顺序从未测过，而它正是现在 `takeOverZones()` 的顺序。
+症状完全吻合：控制器抱着已存的效果不放，对每一条区域写入回 ACK 然后丢弃。
 
-下次从 Windows 回来时用当前版本跑一次 `--restore` 即可证伪或证实。
+它之所以躲过了那么多轮排查，是因为唯一一次测 `0x47` 的顺序是错的 ——
+stage → apply → `0x47 0` → `AutonomousMode=1`，**暂存发生在它还开着的时候**，
+关掉之后再没重新暂存过，于是被误判成"`0x47` 无效"并写进了排除清单。
 
-## 尚未解决
+正确顺序是**先关 `0x47`，再 stage，再 apply**。真机验证：从 Windows 重启回 Linux，
+登录时的自动恢复正确画出了保存的方案，不需要断电。
 
-从 Windows 热重启后控制器停在 MSDL 模式：Fusion 报文全部被 ACK 但不执行，只有标准
-LampArray 接口还能驱动 LED，且该状态能扛过普通关机（芯片吃 +5VSB），只有切断市电
-能清除。
+## 结论
 
-已排除：`0x31`、`0x48`（含各种参数与翻转）、重发 `0x60`、逐区 apply 掩码、
-LampArray `AutonomousMode` 翻转。
+"从 Windows 回来后灯光不受控"是 **`0x47` KeepLedSetting 被留在开启状态**，
+`initialize()` 里连接时关掉它即可，**不需要断电**。
 
-**`0x47` 不算已排除** —— 见上一节，唯一那次测试的顺序是错的（暂存在关掉它之前）。
-这是目前唯一还站得住的假设。
+与之无关但同样存在的两个坑：
 
-设备侧找不到可区分两种状态的可读位，所以程序无法自检，`lampFallback` 只能做成手动
-开关。
+- **固件挂死**（`EPROTO` / `ETIMEDOUT`）：报文连发打出来的，已用 20 ms 节流解决。
+  一旦挂死只有断市电能救，USB reset 会让设备连枚举都失败。
+- **`AutonomousMode`**：主机通过 LampArray 接管后，要发 `AutonomousMode=1` 才会把
+  输出交还给板载效果引擎。
+
+排查过程中被排除的（对本问题无效）：`0x31`、`0x48`（含各种参数与翻转）、重发
+`0x60`、逐区 apply 掩码、LampArray `AutonomousMode` 翻转、SMI/BIOS 通道。
+
+设备侧找不到可区分"正常 / KeepLedSetting 开启"的可读位，所以 `lampFallback` 仍然
+只能是手动开关 —— 不过既然根因已解决，它退化成了一个应急后备，正常情况下用不到。
